@@ -1,14 +1,13 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/ISynchronizedTrackCutter.cs
+// File: Features/Extractor/Services/Engine/ISynchronizedTrackCutter.cs
 // ==========================================
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using ITB_SCREEN_RECORDER.Features.Extractor.Models;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     public interface ISynchronizedTrackCutter
     {

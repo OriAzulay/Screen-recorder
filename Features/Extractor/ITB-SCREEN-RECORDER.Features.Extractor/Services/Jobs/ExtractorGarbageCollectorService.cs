@@ -1,5 +1,5 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/ExtractorGarbageCollectorService.cs
+// File: Features/Extractor/Services/ExtractorGarbageCollectorService.cs
 // ==========================================
 using System;
 using System.Diagnostics;
@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     /// <summary>
     /// שירות רקע לניקוי קבצי זבל בדיסק וסגירת תהליכי FFmpeg/FFprobe תקועים ויתומים
@@ -22,7 +22,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
         private static readonly TimeSpan RunInterval = TimeSpan.FromMinutes(10);
         private static readonly TimeSpan TempFilesMaxAge = TimeSpan.FromMinutes(15);
         private static readonly TimeSpan SpritesCacheMaxAge = TimeSpan.FromHours(8);
-        private static readonly TimeSpan MaxProcessLifetime = TimeSpan.FromMinutes(5); // תהליך FFmpeg שלא סיים תוך 5 דק' נחשב תקוע
+        private static readonly TimeSpan MaxProcessLifetime = TimeSpan.FromMinutes(5);
 
         public ExtractorGarbageCollectorService(ILogger<ExtractorGarbageCollectorService> logger)
         {
@@ -33,7 +33,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
         {
             _logger.LogInformation("[Extractor GC] Service initialized. Running every {Interval} minutes.", RunInterval.TotalMinutes);
 
-            // הפעלה ראשונית עם עליית השרת
             RunFullMaintenanceCycle();
 
             using var timer = new PeriodicTimer(RunInterval);
@@ -63,9 +62,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             CleanupDiskArtifacts();
         }
 
-        /// <summary>
-        /// 💡 סגירת תהליכי FFmpeg ו-FFprobe זומבים/תקועים שחונקים את המעבד
-        /// </summary>
         private void CleanupOrphanProcesses()
         {
             string[] targetProcessNames = { "ffmpeg", "ffprobe" };
@@ -101,7 +97,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     }
                     catch (Exception)
                     {
-                        // התהליך אולי נסגר מעצמו בשבריר שניה זו
                     }
                     finally
                     {
@@ -116,9 +111,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             }
         }
 
-        /// <summary>
-        /// ניקוי קבצי מניפסט, גשרים, פריימים וקאש ישנים מהדיסק
-        /// </summary>
         private void CleanupDiskArtifacts()
         {
             int deletedCount = 0;
@@ -128,8 +120,8 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
 
             string tempPath = Path.GetTempPath();
 
-            // 💡 הוספת תחיליות מלאות כולל bridge_ ו-concat_ שמיוצרות ב-AdvancedExtractorService
-            string[] tempPrefixes = { "spritesheet_", "sync_", "frame_", "stream_", "manifest_", "bridge_", "concat_" };
+            // כולל תחיליות של שני המנועים: itb_spool_, cut_, bridge_, concat_, manifest_
+            string[] tempPrefixes = { "spritesheet_", "sync_", "frame_", "stream_", "manifest_", "bridge_", "concat_", "itb_spool_", "cut_" };
 
             try
             {
@@ -168,7 +160,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 _logger.LogWarning(ex, "[Extractor GC] Failed scanning general temp directory.");
             }
 
-            // ניקוי קאש תמונות Spritesheet ישנות
             string cacheDir = Path.Combine(tempPath, "itb_sprites_cache");
             if (Directory.Exists(cacheDir))
             {
@@ -191,7 +182,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                         }
                     }
 
-                    // מחיקת תיקיות תחנה שהתרוקנו
                     foreach (var dir in cacheDirInfo.EnumerateDirectories())
                     {
                         if (!dir.EnumerateFileSystemInfos().Any())

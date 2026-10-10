@@ -1,12 +1,11 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/ISynchronizationPlanBuilder.cs
+// File: Features/Extractor/Services/Engine/ISynchronizationPlanBuilder.cs
 // ==========================================
 using System;
 using System.Collections.Generic;
 using ITB_SCREEN_RECORDER.Features.Extractor.Models;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     public interface ISynchronizationPlanBuilder
     {

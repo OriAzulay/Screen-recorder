@@ -82,7 +82,8 @@ namespace ITB_SCREEN_RECORDER.AgentWorker
                 {
                     try
                     {
-                        string line = JsonSerializer.Serialize(new { epoch = k.EpochMs, key = k.KeyCombination }) + Environment.NewLine;
+                        // 💡 שמירה ישירה של האובייקט המלא כדי להתאים לסכמת השרת
+                        string line = JsonSerializer.Serialize(k) + Environment.NewLine;
                         File.AppendAllText(_currentOfflineKeysPath, line);
                     }
                     catch { }

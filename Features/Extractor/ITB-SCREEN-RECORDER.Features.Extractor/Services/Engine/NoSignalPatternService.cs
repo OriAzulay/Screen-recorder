@@ -1,5 +1,5 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/NoSignalPatternService.cs
+// File: Features/Extractor/Services/Engine/NoSignalPatternService.cs
 // ==========================================
 using System;
 using System.Collections.Concurrent;
@@ -10,14 +10,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
-    public interface INoSignalPatternService
-    {
-        Task<byte[]> GetOrCreateNoSignalFrameAsync(string ffmpegPath, CancellationToken ct = default);
-        Task<byte[]> GetOrCreateBlackTileAsync(string ffmpegPath, int width, int height, int frameCount, CancellationToken ct = default);
-    }
-
     public class NoSignalPatternService : INoSignalPatternService
     {
         private readonly ILogger<NoSignalPatternService> _logger;
@@ -53,14 +47,12 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     Path.Combine(baseDir, "wwwroot", "assets", "no_signal.png"),
                     Path.Combine(currentDir, "wwwroot", "assets", "no_signal.jpg"),
                     Path.Combine(currentDir, "wwwroot", "assets", "no_signal.png"),
+                    Path.Combine(currentDir, "Features", "Extractor", "wwwroot", "assets", "no_signal.jpg"),
+                    Path.Combine(baseDir, "Features", "Extractor", "wwwroot", "assets", "no_signal.jpg"),
                     Path.Combine(currentDir, "Features", "ExtractorAdvanced", "wwwroot", "assets", "no_signal.jpg"),
                     Path.Combine(baseDir, "Features", "ExtractorAdvanced", "wwwroot", "assets", "no_signal.jpg"),
-                    Path.Combine(currentDir, "Features", "ExtractorAdvanced", "Client", "public", "assets", "no_signal.jpg"),
-                    Path.Combine(baseDir, "Features", "ExtractorAdvanced", "Client", "public", "assets", "no_signal.jpg"),
                     Path.Combine(baseDir, "Assets", "no_signal.jpg"),
-                    Path.Combine(baseDir, "Assets", "pm5544.jpg"),
-                    Path.Combine(currentDir, "Assets", "no_signal.jpg"),
-                    Path.Combine(currentDir, "Assets", "pm5544.jpg")
+                    Path.Combine(baseDir, "Assets", "pm5544.jpg")
                 };
 
                 foreach (var imgPath in imageCandidates)
@@ -100,7 +92,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     }
                 }
 
-                // מחולל פנימי מובנה של מעגל הבדיקה בשחור-לבן (Philips PM5544 Grayscale)
                 using var ms = new MemoryStream(65536);
                 string fontClause = ResolveFontClause();
 
@@ -121,7 +112,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     "drawbox=x=(w-540)/2:y=(h-140)/2:w=540:h=140:c=black:t=fill," +
                     "drawbox=x=(w-540)/2:y=(h-140)/2:w=540:h=140:c=white:t=2," +
                     $"drawtext=text='NO SIGNAL'{fontClause}:fontcolor=white:fontsize=48:x=(w-text_w)/2:y=(h-text_h)/2-16," +
-                    $"drawtext=text='CH-01 • IBA ISRAEL'{fontClause}:fontcolor=0xcccccc:fontsize=18:x=(w-text_w)/2:y=(h-text_h)/2+24," +
+                    $"drawtext=text='CH-01 • SURVEILLANCE'{fontClause}:fontcolor=0xcccccc:fontsize=18:x=(w-text_w)/2:y=(h-text_h)/2+24," +
                     "drawbox=x=(w-620)/2:y=520:w=620:h=60:c=0x181818:t=fill," +
                     "drawbox=x=(w-620)/2:y=580:w=620:h=40:c=white:t=fill," +
                     "hue=s=0";
@@ -147,24 +138,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     return _noSignalFrameCache;
                 }
 
-                // Fallback
-                using var fallbackMs = new MemoryStream(32768);
-                var fallbackInfo = new ProcessStartInfo
-                {
-                    FileName = ffmpegPath,
-                    Arguments = "-nostdin -loglevel error -f lavfi -i smptehdbars=s=1280x720,hue=s=0 -vf \"drawbox=x=(w-500)/2:y=(h-120)/2:w=500:h=120:c=black:t=fill,drawbox=x=(w-500)/2:y=(h-120)/2:w=500:h=120:c=white:t=2\" -vframes 1 -q:v 4 -f image2pipe -vcodec mjpeg pipe:1",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = false,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var fbProc = new Process { StartInfo = fallbackInfo };
-                fbProc.Start();
-                await fbProc.StandardOutput.BaseStream.CopyToAsync(fallbackMs, ct);
-                await fbProc.WaitForExitAsync(ct);
-
-                _noSignalFrameCache = fallbackMs.ToArray();
-                return _noSignalFrameCache;
+                return Array.Empty<byte>();
             }
             finally
             {

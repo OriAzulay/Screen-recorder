@@ -100,6 +100,8 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             }
 
             var plan = _advancedExtractorService.BuildSynchronizationPlan(request.StationIds, startUtc, endUtc, allStationChunks);
+            plan.KeystrokeMode = request.KeystrokeMode;
+
             double originalSeconds = Math.Max(1.0, (endUtc - startUtc).TotalSeconds);
             double activeFraction = Math.Clamp(plan.TotalActiveSeconds / originalSeconds, 0.05, 1.0);
 
@@ -175,7 +177,9 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 SpeedMBps = 0,
                 FileSizeBytes = estimatedSize,
                 EstimatedSecondsRemaining = Math.Max(10, (int)(durationMinutes * request.StationIds.Count * 2)),
-                CreatedAtUtc = DateTime.UtcNow
+                CreatedAtUtc = DateTime.UtcNow,
+                // 💡 העברת ה-KeystrokeMode שהמשתמש בחר ב-UI ישירות לתוך מודל הג'וב
+                KeystrokeMode = request.KeystrokeMode
             };
 
             _jobs[job.JobId] = job;
@@ -233,6 +237,10 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 }
 
                 var plan = _advancedExtractorService.BuildSynchronizationPlan(job.StationIds, startUtc, endUtc, allStationChunks);
+
+                // 💡 העברת מצב המקלדת הנבחר מהג'וב ישירות לתוך ה-SynchronizationPlan שנמסר ל-TrackCutter
+                plan.KeystrokeMode = job.KeystrokeMode;
+
                 double originalDurationSec = Math.Max(1.0, (endUtc - startUtc).TotalSeconds);
                 double exportedDurationSec = Math.Max(1.0, plan.TotalActiveSeconds);
 
@@ -331,6 +339,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                         sessionId = job.JobId,
                         rangeStartUtc = startUtc,
                         rangeEndUtc = endUtc,
+                        keystrokeMode = job.KeystrokeMode.ToString(),
                         originalDurationSeconds = originalDurationSec,
                         exportedDurationSeconds = exportedDurationSec,
                         removedGlobalGaps = plan.RemovedGlobalGaps.Select(g => new

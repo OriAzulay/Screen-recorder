@@ -4,6 +4,7 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import CameraCard from './views/Card/CameraCard.jsx';
 import StudioVideoFeed from '../Player/StudioVideoFeed.jsx';
+import KeystrokePlaybackOverlay from '../Player/KeystrokePlaybackOverlay.jsx';
 import { calculateOptimalGrid } from './utils/viewportLayoutCalculator.js';
 import './MulticamViewport.scss';
 
@@ -32,6 +33,7 @@ export default function MulticamViewport({
     onOpenSpotlight,
     baseEpochMs = 0,
     playheadMs = 0,
+    playheadEpochMs = 0,
     timeMode = 'LOCAL',
     isPlaying = false,
     setIsPlaying,
@@ -41,7 +43,9 @@ export default function MulticamViewport({
     setPlayheadMs,
     globalGaps = [],
     recordingSegments = {},
-    playbackSpeed = 1
+    playbackSpeed = 1,
+    keystrokeMode = 'BURN_IN',
+    keystrokes = []
 }) {
     const containerRef = useRef(null);
     const [containerDimensions, setContainerDimensions] = useState({ width: 0, height: 0 });
@@ -86,8 +90,8 @@ export default function MulticamViewport({
     }, [setIsPlaying]);
 
     const currentEpochMs = useMemo(() => {
-        return Math.round(baseEpochMs + playheadMs);
-    }, [baseEpochMs, playheadMs]);
+        return playheadEpochMs > 0 ? playheadEpochMs : Math.round(baseEpochMs + playheadMs);
+    }, [playheadEpochMs, baseEpochMs, playheadMs]);
 
     useEffect(() => {
         if (!containerRef.current) return;
@@ -201,6 +205,13 @@ export default function MulticamViewport({
                             recordingSegments={recordingSegments}
                             globalGaps={globalGaps}
                             showWatermark={false}
+                        />
+
+                        {/* 💡 הצגת שכבת ה-HUD מעל הווידאו בנגן בהתאם למצב הנבחר */}
+                        <KeystrokePlaybackOverlay
+                            currentEpochMs={currentEpochMs}
+                            keystrokes={keystrokes}
+                            keystrokeMode={keystrokeMode}
                         />
 
                         <div className="spotlight-interaction-hint">

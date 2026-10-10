@@ -1,12 +1,12 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/IMediaProbeService.cs
+// File: Features/Extractor/Services/IMediaProbeService.cs
 // ==========================================
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
+using ITB_SCREEN_RECORDER.Features.Extractor.Models;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     public interface IMediaProbeService
     {

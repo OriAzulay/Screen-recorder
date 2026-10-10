@@ -1,5 +1,5 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/SynchronizedTrackCutter.cs
+// File: Features/Extractor/Services/Engine/SynchronizedTrackCutter.cs
 // ==========================================
 using System;
 using System.Collections.Generic;
@@ -12,15 +12,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 using ITB_SCREEN_RECORDER.Features.Extractor.Models;
-using ITB_SCREEN_RECORDER.Features.Extractor.Services;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
 using Microsoft.Extensions.Logging;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     public class SynchronizedTrackCutter : ISynchronizedTrackCutter
     {
-        private readonly IBridgeVideoGenerator _bridgeGenerator;
+        private readonly IDummyVideoGenerator _dummyGenerator;
         private readonly IMediaProbeService _mediaProbeService;
         private readonly IFfmpegBinaryResolver _binaryResolver;
         private readonly IKeystrokeSrtGenerator? _srtGenerator;
@@ -28,13 +26,13 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
         private static readonly SemaphoreSlim _concurrencyThrottle = new(2, 2);
 
         public SynchronizedTrackCutter(
-            IBridgeVideoGenerator bridgeGenerator,
+            IDummyVideoGenerator dummyGenerator,
             IMediaProbeService mediaProbeService,
             IFfmpegBinaryResolver binaryResolver,
             ILogger<SynchronizedTrackCutter> logger,
             IKeystrokeSrtGenerator? srtGenerator = null)
         {
-            _bridgeGenerator = bridgeGenerator;
+            _dummyGenerator = dummyGenerator;
             _mediaProbeService = mediaProbeService;
             _binaryResolver = binaryResolver;
             _logger = logger;
@@ -100,6 +98,16 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 }
             }
 
+            // 💡 יצירת Master Dummy יחיד לכל אורך ה-Timeline
+            string? masterDummyPath = null;
+            double totalDurationSecs = (cutEndUtc - cutStartUtc).TotalSeconds;
+            if (totalDurationSecs > 0 && (plan.ActiveSegments.Count > 1 || orderedChunks.Count == 0))
+            {
+                double requiredDummyLength = Math.Max(3600, totalDurationSecs + 60);
+                masterDummyPath = await _dummyGenerator.GetOrCreateDummyVideoAsync(
+                    requiredDummyLength, baselineProbe.Width, baselineProbe.Height, baselineProbe.Fps, trackHasAudio, ct);
+            }
+
             var manifestLines = new List<string> { "ffconcat version 1.0" };
             var cutJunctions = new List<double>();
             double runningSeconds = 0;
@@ -108,7 +116,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             {
                 var seg = plan.ActiveSegments[segIdx];
                 DateTime cursor = seg.StartUtc;
-                RecordingChunkMetadata? lastPlayedChunkInSeg = null;
 
                 if (segIdx > 0 && runningSeconds > 0.6)
                 {
@@ -122,15 +129,13 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 if (segChunks.Count == 0)
                 {
                     double gapDur = seg.DurationSeconds;
-                    if (gapDur > 0.05)
+                    if (gapDur > 0.05 && masterDummyPath != null)
                     {
-                        string bridge = await _bridgeGenerator.GenerateMatchedBridgeVideoAsync(gapDur, baselineProbe, tempOutputDir, trackHasAudio, ct);
-                        if (File.Exists(bridge) && new FileInfo(bridge).Length > 1024)
-                        {
-                            manifestLines.Add($"file '{bridge.Replace('\\', '/')}'");
-                            manifestLines.Add(string.Format(CultureInfo.InvariantCulture, "duration {0:F3}", gapDur));
-                            runningSeconds += gapDur;
-                        }
+                        // 💡 חיתוך וירטואלי מתוך ה-Master
+                        manifestLines.Add($"file '{masterDummyPath.Replace('\\', '/')}'");
+                        manifestLines.Add("inpoint 0.000");
+                        manifestLines.Add(string.Format(CultureInfo.InvariantCulture, "outpoint {0:F3}", gapDur));
+                        runningSeconds += gapDur;
                     }
                     continue;
                 }
@@ -140,14 +145,11 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     if (chunk.StartUtc > cursor.AddSeconds(0.2))
                     {
                         double gapDur = (chunk.StartUtc - cursor).TotalSeconds;
-                        var neighborChunk = lastPlayedChunkInSeg ?? chunk;
-                        var neighborProbe = await GetChunkProbeAsync(neighborChunk);
-
-                        string bridge = await _bridgeGenerator.GenerateMatchedBridgeVideoAsync(gapDur, neighborProbe, tempOutputDir, trackHasAudio, ct);
-                        if (File.Exists(bridge) && new FileInfo(bridge).Length > 1024)
+                        if (masterDummyPath != null)
                         {
-                            manifestLines.Add($"file '{bridge.Replace('\\', '/')}'");
-                            manifestLines.Add(string.Format(CultureInfo.InvariantCulture, "duration {0:F3}", gapDur));
+                            manifestLines.Add($"file '{masterDummyPath.Replace('\\', '/')}'");
+                            manifestLines.Add("inpoint 0.000");
+                            manifestLines.Add(string.Format(CultureInfo.InvariantCulture, "outpoint {0:F3}", gapDur));
                             runningSeconds += gapDur;
                         }
                     }
@@ -174,21 +176,17 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
 
                         runningSeconds += dur;
                         cursor = effEnd;
-                        lastPlayedChunkInSeg = chunk;
                     }
                 }
 
                 if (cursor < seg.EndUtc.AddSeconds(-0.2))
                 {
                     double gapDur = (seg.EndUtc - cursor).TotalSeconds;
-                    var neighborChunk = lastPlayedChunkInSeg;
-                    var neighborProbe = neighborChunk != null ? await GetChunkProbeAsync(neighborChunk) : baselineProbe;
-
-                    string bridge = await _bridgeGenerator.GenerateMatchedBridgeVideoAsync(gapDur, neighborProbe, tempOutputDir, trackHasAudio, ct);
-                    if (File.Exists(bridge) && new FileInfo(bridge).Length > 1024)
+                    if (masterDummyPath != null)
                     {
-                        manifestLines.Add($"file '{bridge.Replace('\\', '/')}'");
-                        manifestLines.Add(string.Format(CultureInfo.InvariantCulture, "duration {0:F3}", gapDur));
+                        manifestLines.Add($"file '{masterDummyPath.Replace('\\', '/')}'");
+                        manifestLines.Add("inpoint 0.000");
+                        manifestLines.Add(string.Format(CultureInfo.InvariantCulture, "outpoint {0:F3}", gapDur));
                         runningSeconds += gapDur;
                     }
                 }
@@ -226,28 +224,33 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 vfFilters.Add($"fade=t=out:st={endStartStr}:d=0.3:enable='between(t,{endStartStr},{totalStr})'");
             }
 
-            // 💡 ניתוב מדויק לפי KeystrokeMode (None / Caption / BurnIn)
-            string? srtPath = null;
+            string? subtitleTempPath = null;
             string subInputArgs = "";
+            string mapArgs = "";
 
             if (plan.KeystrokeMode != KeystrokeExportMode.None && _srtGenerator != null)
             {
                 long startEpochMs = new DateTimeOffset(cutStartUtc).ToUnixTimeMilliseconds();
                 long endEpochMs = new DateTimeOffset(cutEndUtc).ToUnixTimeMilliseconds();
-                srtPath = await _srtGenerator.CreateSrtFileAsync(stationId, startEpochMs, endEpochMs, ct);
 
-                if (srtPath != null && File.Exists(srtPath))
+                if (plan.KeystrokeMode == KeystrokeExportMode.BurnIn)
                 {
-                    if (plan.KeystrokeMode == KeystrokeExportMode.BurnIn)
+                    subtitleTempPath = await _srtGenerator.CreateAssKeycapsFileAsync(stationId, startEpochMs, endEpochMs, ct);
+                    if (subtitleTempPath != null && File.Exists(subtitleTempPath) && new FileInfo(subtitleTempPath).Length > 0)
                     {
-                        // צריבה קשיחה: הוספה ל-Filter Graph
-                        string escapedSrt = srtPath.Replace("\\", "/").Replace(":", "\\:");
-                        vfFilters.Add($"subtitles='{escapedSrt}':force_style='FontSize=22,PrimaryColour=&H00FFFF,BackColour=&H80000000,BorderStyle=4'");
+                        string escapedAss = subtitleTempPath.Replace("\\", "/").Replace(":", "\\:").Replace("'", "\\'");
+                        vfFilters.Add($"subtitles='{escapedAss}'");
                     }
-                    else if (plan.KeystrokeMode == KeystrokeExportMode.Caption)
+                }
+                else if (plan.KeystrokeMode == KeystrokeExportMode.Caption)
+                {
+                    subtitleTempPath = await _srtGenerator.CreateSrtFileAsync(stationId, startEpochMs, endEpochMs, ct);
+                    if (subtitleTempPath != null && File.Exists(subtitleTempPath) && new FileInfo(subtitleTempPath).Length > 0)
                     {
-                        // כתוביות רכות: הזרקת רצועת mov_text
-                        subInputArgs = $"-i \"{srtPath}\" -c:s mov_text -metadata:s:s:0 title=\"Keystroke Audit\"";
+                        subInputArgs = $"-i \"{subtitleTempPath.Replace('\\', '/')}\"";
+                        mapArgs = trackHasAudio
+                            ? "-map 0:v -map 0:a? -map 1:s -c:s mov_text -metadata:s:s:0 title=\"Keystroke Audit\""
+                            : "-map 0:v -map 1:s -c:s mov_text -metadata:s:s:0 title=\"Keystroke Audit\"";
                     }
                 }
             }
@@ -262,7 +265,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             string ffmpegPath = _binaryResolver.ResolveFfmpeg();
 
             string arguments = $"-nostdin -v error -progress pipe:1 -fflags +genpts+discardcorrupt -f concat -safe 0 -i \"{tempManifestPath.Replace('\\', '/')}\" {subInputArgs} " +
-                               $"-vf \"{videoFilterArg}\" " +
+                               $"{mapArgs} -vf \"{videoFilterArg}\" " +
                                $"-c:v libx264 -preset veryfast -crf 20 -avoid_negative_ts make_zero {audioArg} -movflags +faststart -y \"{outputPath.Replace('\\', '/')}\"";
 
             var startInfo = new ProcessStartInfo
@@ -319,7 +322,13 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             {
                 _concurrencyThrottle.Release();
                 if (File.Exists(tempManifestPath)) try { File.Delete(tempManifestPath); } catch { }
-                if (srtPath != null && File.Exists(srtPath)) try { File.Delete(srtPath); } catch { }
+                if (subtitleTempPath != null && File.Exists(subtitleTempPath)) try { File.Delete(subtitleTempPath); } catch { }
+
+                // מחיקת ה-Master Dummy של התחנה בסוף התהליך כדי לפנות מקום
+                if (masterDummyPath != null && File.Exists(masterDummyPath))
+                {
+                    try { File.Delete(masterDummyPath); } catch { }
+                }
             }
         }
     }

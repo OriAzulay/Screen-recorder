@@ -43,4 +43,6 @@ public interface ICatalogRepository : IKeystrokeRepository
     Task<Dictionary<string, StationOverrideRecord>> GetAllOverridesAsync();
     Task UpsertOverrideAsync(string hostname, string? videoBitrate, int? targetFps);
     Task<bool> DeleteOverrideAsync(string hostname);
+
+    Task<int> PurgeExpiredKeystrokesAsync(long cutoffEpochMs);
 }

@@ -50,7 +50,10 @@ export default function TimelineBoard({
     onViewportStartChange,
     onEstimateLoaded,
     onFitRange,
-    onJumpViewportTo
+    onJumpViewportTo,
+    keystrokeMode = 'BURN_IN',
+    onChangeKeystrokeMode,
+    showKeystrokes = true
 }) {
     const [hoverMs, setHoverMs] = useState(null);
     const [trackBankIndex, setTrackBankIndex] = useState(0);
@@ -161,6 +164,7 @@ export default function TimelineBoard({
                             onStartDragMinimap={handleStartDrag}
                         />
 
+                        {/* 💡 העברת מצב המקלדת ומחזור המצבים לכפתור ה-Header */}
                         <TimelineHeaderActions
                             earliestMediaMs={earliestMediaMs}
                             latestMediaMs={latestMediaMs}
@@ -186,6 +190,8 @@ export default function TimelineBoard({
                             onResetZoom={onZoomReset}
                             baseEpochMs={baseEpochMs}
                             timeMode={timeMode}
+                            keystrokeMode={keystrokeMode}
+                            onChangeKeystrokeMode={onChangeKeystrokeMode}
                         />
                     </div>
 
@@ -204,6 +210,7 @@ export default function TimelineBoard({
                             earliestMediaMs={earliestMediaMs}
                             movieBoundaries={movieBoundaries}
                             activeStationName={activeStationObj?.displayName || activeStationObj?.hostname || activeStationObj?.name}
+                            showKeystrokes={showKeystrokes}
                         />
                     </div>
                 </div>

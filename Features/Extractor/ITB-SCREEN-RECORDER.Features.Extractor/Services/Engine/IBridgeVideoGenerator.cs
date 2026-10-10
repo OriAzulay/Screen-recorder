@@ -1,11 +1,11 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/IBridgeVideoGenerator.cs
+// File: Features/Extractor/Services/IBridgeVideoGenerator.cs
 // ==========================================
 using System.Threading;
 using System.Threading.Tasks;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
+using ITB_SCREEN_RECORDER.Features.Extractor.Models;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     public interface IBridgeVideoGenerator
     {

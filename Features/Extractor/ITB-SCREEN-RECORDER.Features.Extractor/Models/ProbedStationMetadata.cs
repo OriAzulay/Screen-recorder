@@ -1,7 +1,7 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Models/ProbedStationMetadata.cs
+// File: Features/Extractor/Models/ProbedStationMetadata.cs
 // ==========================================
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Models
 {
     public class ProbedStationMetadata
     {

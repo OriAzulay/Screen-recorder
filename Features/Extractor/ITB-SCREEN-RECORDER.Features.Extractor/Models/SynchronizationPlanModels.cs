@@ -1,12 +1,12 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Models/SynchronizationPlanModels.cs
+// File: Features/Extractor/Models/SynchronizationPlanModels.cs
 // ==========================================
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Models
 {
     public class TimeInterval
     {
@@ -39,7 +39,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
         public List<StationGapRecord> StationGaps { get; set; } = new();
         public double TotalActiveSeconds => ActiveSegments.Sum(s => s.DurationSeconds);
 
-        // 💡 אופן הצגת המקשים בחיתוך הסופי (None / Caption / BurnIn)
-        public KeystrokeExportMode KeystrokeMode { get; set; } = KeystrokeExportMode.Caption;
+        // 💡 אופן הצגת המקשים בייצוא (None / Caption / BurnIn)
+        public KeystrokeExportMode KeystrokeMode { get; set; } = KeystrokeExportMode.BurnIn;
     }
 }

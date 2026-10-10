@@ -1,13 +1,6 @@
 ﻿// ==========================================
 // File: Features/ExtractorAdvanced/Controllers/ExtractorAdvancedController.cs
 // ==========================================
-using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
-using ITB_SCREEN_RECORDER.Features.Extractor.Services;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -17,6 +10,14 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
+using ITB_SCREEN_RECORDER.Features.Extractor.Models;
+using ITB_SCREEN_RECORDER.Features.Extractor.Services;
+using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
+using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services;
 
 namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
 {
@@ -44,7 +45,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             _logger = logger;
         }
 
-        // 💡 שליפת אירועי המקלדת עבור ה-Timeline Ruler דרך IKeystrokeRepository מ-Core
         [HttpGet("keystrokes")]
         public async Task<IActionResult> GetKeystrokes(
             [FromQuery] string stationId,
@@ -62,7 +62,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             long lStart = (long)Math.Round(startEpoch);
             long lEnd = (long)Math.Round(endEpoch);
 
-            // 💡 Auto-Detection: אם חותמת הזמן הועברה בשניות (10 ספרות), נמיר אוטומטית למילישניות
             const long SecondsThreshold = 100_000_000_000L;
             if (lStart > 0 && lStart < SecondsThreshold) lStart *= 1000;
             if (lEnd > 0 && lEnd < SecondsThreshold) lEnd *= 1000;
@@ -72,7 +71,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                 return BadRequest("Invalid epoch window: endEpoch must be strictly greater than startEpoch.");
             }
 
-            // 💡 הגנת זיכרון: הגבלת חלון השאילתה המקסימלי (למשל: עד 48 שעות לבקשה בודדת)
             const long MaxWindowMs = 48L * 60 * 60 * 1000;
             if (lEnd - lStart > MaxWindowMs)
             {

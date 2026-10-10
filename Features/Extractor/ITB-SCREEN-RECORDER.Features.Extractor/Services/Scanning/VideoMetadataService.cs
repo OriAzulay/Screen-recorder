@@ -1,5 +1,5 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/VideoMetadataService.cs
+// File: Features/Extractor/Services/Scanning/VideoMetadataService.cs
 // ==========================================
 using System;
 using System.Collections.Generic;
@@ -11,18 +11,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-using ITB_SCREEN_RECORDER.Features.Extractor.Services;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
+using ITB_SCREEN_RECORDER.Features.Extractor.Models;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
-    public interface IVideoMetadataService
-    {
-        Task<StreamMetadataDto> GetStreamMetadataAsync(string hostname, long epochMs, string ffprobePath, CancellationToken ct = default);
-        Task<double> GetAccurateVideoDurationSecondsAsync(string filePath, string ffprobePath, CancellationToken ct = default);
-        Task AdjustChunksToAccuratePtsAsync<T>(IEnumerable<T> chunks, string ffprobePath, CancellationToken ct = default) where T : class;
-    }
-
     public class VideoMetadataService : IVideoMetadataService
     {
         private readonly IStorageScannerService _storageScanner;
@@ -57,7 +49,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 return new StreamMetadataDto { Fps = 30.0, FrameDurationMs = 33.333 };
             }
 
-            // 💡 אם המטא-דאטה כבר נשלף מה-DB, מחזירים אותו מיד ללא הרצת תהליך חיצוני
             if (matchingChunk.Width > 0 && matchingChunk.Fps > 0)
             {
                 var instantMeta = new StreamMetadataDto

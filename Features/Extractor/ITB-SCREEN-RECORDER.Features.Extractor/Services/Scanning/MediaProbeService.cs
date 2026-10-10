@@ -1,12 +1,11 @@
 ﻿// ==========================================
-// File: Features/ExtractorAdvanced/Services/MediaProbeService.cs
+// File: Features/Extractor/Services/Scanning/MediaProbeService.cs
 // ==========================================
 using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,10 +13,8 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ITB_SCREEN_RECORDER.Features.Extractor.Models;
-using ITB_SCREEN_RECORDER.Features.Extractor.Services;
-using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
 
-namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
+namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 {
     public class MediaProbeService : IMediaProbeService
     {
@@ -44,8 +41,8 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             string binaryName = OperatingSystem.IsWindows() ? "ffprobe.exe" : "ffprobe";
             var baseDir = AppContext.BaseDirectory;
             string[] directCandidates = {
-                Path.Combine(baseDir, "Features", "ExtractorAdvanced", binaryName),
                 Path.Combine(baseDir, "Features", "Extractor", binaryName),
+                Path.Combine(baseDir, "Features", "ExtractorAdvanced", binaryName),
                 Path.Combine(baseDir, "Features", "Extractor", "Bin", binaryName),
                 Path.Combine(baseDir, "Features", "Extractor", "Tools", "Win", binaryName),
                 Path.Combine(baseDir, binaryName)
@@ -96,7 +93,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     return new ProbedStationMetadata();
                 }
 
-                // 💡 שימוש ישיר בערכי האינדקס מה-DB אם קיימים
                 if (sampleChunk.Width > 0 && sampleChunk.Fps > 0)
                 {
                     var metaFromDb = new ProbedStationMetadata
@@ -136,25 +132,21 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 FileName = ffprobePath,
                 Arguments = $"-v error -show_streams -show_format -of json \"{filePath.Replace('\\', '/')}\"",
                 RedirectStandardOutput = true,
-                RedirectStandardError = true,
+                RedirectStandardError = true, // We don't read standard error to avoid blocks
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
 
             using var proc = new Process { StartInfo = psi };
-            var sb = new StringBuilder();
-            proc.OutputDataReceived += (_, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
 
             try
             {
                 proc.Start();
-                proc.BeginOutputReadLine();
+
+                // 💡 קריאה חסכונית בזיכרון (Stream-based) ללא StringBuilder
+                using var doc = await JsonDocument.ParseAsync(proc.StandardOutput.BaseStream, default, ct);
                 await proc.WaitForExitAsync(ct);
 
-                string json = sb.ToString();
-                if (string.IsNullOrWhiteSpace(json)) return meta;
-
-                using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("streams", out var streams) && streams.ValueKind == JsonValueKind.Array)
                 {
                     bool foundVideo = false;
@@ -210,6 +202,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                     }
                 }
             }
+            catch (JsonException) { /* Stream empty or invalid JSON */ }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[MediaProbeService] Failed probing file '{File}' for station '{StationId}'.", filePath, stationId);

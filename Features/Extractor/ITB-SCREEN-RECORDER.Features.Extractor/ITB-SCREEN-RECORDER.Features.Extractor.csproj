@@ -83,6 +83,12 @@
 	  <Folder Include="Client\src\components\TimeRangeBar\" />
 	  <Folder Include="Tools\Linux\" />
 	</ItemGroup>
+	<ItemGroup>
+	  <None Update="wwwroot\assets\no_signal.jpg">
+	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+	    <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+	  </None>
+	</ItemGroup>
 
 	<!-- העתקה אוטומטית של ה-DLL והנכסים לסביבת פיתוח מקומית בסיום בנייה -->
 	<Target Name="CopyToDevServer" AfterTargets="Build" Condition="Exists('..\..\..\ITB-SCREEN-RECORDER.Server\bin\Debug\net8.0')">

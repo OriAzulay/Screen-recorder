@@ -1,4 +1,6 @@
-﻿// Features/ExtractorAdvanced/Services/AdvancedExtractorService.cs
+﻿// ==========================================
+// File: Features/ExtractorAdvanced/Services/AdvancedExtractorService.cs
+// ==========================================
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -10,9 +12,12 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 using ITB_SCREEN_RECORDER.Features.Extractor.Models;
 using ITB_SCREEN_RECORDER.Features.Extractor.Services;
 using ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models;
+
+using SynchronizationPlan = ITB_SCREEN_RECORDER.Features.Extractor.Models.SynchronizationPlan;
 
 namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
 {
@@ -40,8 +45,10 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             ISynchronizedTrackCutter trackCutter,
             IMediaProbeService mediaProbeService,
             ILogger<AdvancedExtractorService> logger,
-            IMemoryCache? memoryCache = null)
-            : base(storageScanner, ffmpegRunner, extractorOptions, logger)
+            IMemoryCache? memoryCache = null,
+            IKeystrokeSrtGenerator? srtGenerator = null)
+            // 💡 תיקון קריטי: העברת planBuilder, trackCutter ו-srtGenerator למחלקת הבסיס
+            : base(storageScanner, ffmpegRunner, extractorOptions, logger, srtGenerator, trackCutter, planBuilder)
         {
             _dummyVideoGenerator = dummyVideoGenerator;
             _patternService = patternService;
@@ -246,7 +253,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = ffmpegPath,
-                    // 💡 האצת חומרה אוטומטית (hwaccel) אם קיימת, ללא הדגל המכשיל nokey
                     Arguments = $"-nostdin -loglevel error -hwaccel auto -noautorotate " +
                                 $"-ss {offsetSeconds.ToString("0.000", CultureInfo.InvariantCulture)} " +
                                 $"-i \"{inputPath.Replace('\\', '/')}\" -an -sn -dn -threads 1 -vframes 1 -q:v 3 -f image2pipe -vcodec mjpeg pipe:1",

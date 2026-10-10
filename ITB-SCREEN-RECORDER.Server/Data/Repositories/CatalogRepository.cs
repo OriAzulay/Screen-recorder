@@ -288,4 +288,11 @@ public sealed class CatalogRepository : ICatalogRepository
         int affected = await db.ExecuteAsync(sql, new { hostname });
         return affected > 0;
     }
+
+    public async Task<int> PurgeExpiredKeystrokesAsync(long cutoffEpochMs)
+    {
+        using var db = _factory.CreateConnection();
+        const string sql = "DELETE FROM keystroke_events WHERE epoch_ms < @cutoffEpochMs;";
+        return await db.ExecuteAsync(sql, new { cutoffEpochMs });
+    }
 }

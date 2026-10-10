@@ -13,14 +13,6 @@ using ITB_SCREEN_RECORDER.Features.Extractor.Services;
 
 namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
 {
-    public class StreamMetadataDto
-    {
-        public double Fps { get; set; } = 30.0;
-        public double FrameDurationMs { get; set; } = 33.333;
-        public int Width { get; set; } = 1920;
-        public int Height { get; set; } = 1080;
-    }
-
     public class AdvanceJobInfo : ExportJobInfo
     {
         public List<string> StationIds { get; set; } = new();
@@ -28,11 +20,9 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
         public long OutEpochMs { get; set; }
         public string CutMode { get; set; } = "SynchronizedMultiTrack";
 
-        // 💡 הוספת שדות טלמטריה מתקדמים לניהול ETA ומהירות
         public double EstimatedSecondsRemaining { get; set; }
         public double SpeedMBps { get; set; }
 
-        // 💡 אופן הצגת המקשים בייצוא
         public KeystrokeExportMode KeystrokeMode { get; set; } = KeystrokeExportMode.Caption;
     }
 
@@ -47,7 +37,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
         [JsonPropertyName("outEpochMs")]
         public long OutEpochMs { get; set; }
 
-        // 💡 אופן הצגת המקשים שנשלח מהמודאל ב-UI
         [JsonPropertyName("keystrokeMode")]
         public KeystrokeExportMode KeystrokeMode { get; set; } = KeystrokeExportMode.Caption;
     }

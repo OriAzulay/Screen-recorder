@@ -40,6 +40,14 @@ namespace ITB_SCREEN_RECORDER.Core.Contracts.Keystroke
     /// </summary>
     public interface IKeystrokeSrtGenerator
     {
+        /// <summary>
+        /// מייצר קובץ SRT סטנדרטי עבור רצועת כתוביות רכה (Caption Track)
+        /// </summary>
         Task<string?> CreateSrtFileAsync(string stationId, long inEpochMs, long outEpochMs, CancellationToken ct = default);
+
+        /// <summary>
+        /// מייצר קובץ ASS מתקדם עם תגיות Keycaps טקטיות עבור צריבה קשיחה בווידאו (Burn-In)
+        /// </summary>
+        Task<string?> CreateAssKeycapsFileAsync(string stationId, long inEpochMs, long outEpochMs, CancellationToken ct = default);
     }
 }

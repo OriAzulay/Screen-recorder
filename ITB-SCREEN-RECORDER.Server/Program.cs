@@ -9,6 +9,7 @@ using ITB_SCREEN_RECORDER.Core.Plugins;
 using ITB_SCREEN_RECORDER.Server.Data;
 using ITB_SCREEN_RECORDER.Server.Data.Repositories;
 using ITB_SCREEN_RECORDER.Server.Services;
+using ITB_SCREEN_RECORDER.Server.Services.Retention;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Features;
@@ -262,6 +263,9 @@ namespace ITB_SCREEN_RECORDER.Server
                 builder.Services.AddHostedService<MediaMtxSupervisorWorker>();
                 builder.Services.AddHostedService<RecordingChunkScheduler>();
                 builder.Services.AddHostedService<ServerTelemetryHostService>();
+
+                builder.Services.AddSingleton<IRetentionTask, StorageChunksRetentionTask>();
+                builder.Services.AddSingleton<IRetentionTask, KeystrokesRetentionTask>();
                 builder.Services.AddHostedService<StorageRetentionWorker>();
 
                 var app = builder.Build();

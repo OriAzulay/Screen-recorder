@@ -12,7 +12,6 @@ import BookmarksModal from './components/Modals/BookmarksModal.jsx';
 import SoloSpotlightModal from './components/Modals/SoloSpotlightModal.jsx';
 import ShortcutsHelpModal from './components/Modals/ShortcutsHelpModal.jsx';
 import ExportJobMonitor from './components/ExportMonitor/ExportJobMonitor.jsx';
-import ExportOptionsModal from './components/Modals/ExportOptionsModal.jsx';
 
 import { useStudioData } from './hooks/useStudioData.js';
 import { usePlaybackEngine } from './hooks/usePlaybackEngine.js';
@@ -49,6 +48,9 @@ export default function ExtractorAdvancedStudio() {
 
     const [timeRange, setTimeRange] = useState(cached.timeRange || generateDefaultTimeRange());
     const [timeMode, setTimeMode] = useState(cached.timeMode || 'LOCAL');
+
+    // 💡 ניהול מצב תצוגה וצריבת מקשים אחוד: 'BURN_IN' | 'CAPTION' | 'NONE'
+    const [keystrokeMode, setKeystrokeMode] = useState(cached.keystrokeMode || 'BURN_IN');
 
     useEffect(() => {
         initDstEngineAsync().catch(err => console.warn('[Studio] DST init error:', err));
@@ -171,7 +173,30 @@ export default function ExtractorAdvancedStudio() {
     const [isWorkspaceActive, setIsWorkspaceActive] = useState(
         Boolean(cached.isWorkspaceActive && cached.selectedStationIds?.length > 0)
     );
-    const [isExportOptionsOpen, setIsExportOptionsOpen] = useState(false);
+
+    // 💡 שליפת אירועי מקלדת עבור התחנה הפעילה לצורך הצגת ה-HUD ב-Playback
+    const [activeStationKeystrokes, setActiveStationKeystrokes] = useState([]);
+
+    useEffect(() => {
+        const stationName = activeStation?.displayName || activeStation?.hostname || activeStation?.id;
+        if (!stationName || !timelineBaseEpochMs || keystrokeMode === 'NONE') {
+            setActiveStationKeystrokes([]);
+            return;
+        }
+
+        const startEpoch = timelineBaseEpochMs;
+        const endEpoch = timelineBaseEpochMs + totalTimelineDurationMs;
+        const ac = new AbortController();
+
+        fetch(`/api/v1/extractor-advanced/keystrokes?stationId=${encodeURIComponent(stationName)}&startEpoch=${startEpoch}&endEpoch=${endEpoch}`, { signal: ac.signal })
+            .then(res => res.ok ? res.json() : [])
+            .then(data => setActiveStationKeystrokes(Array.isArray(data) ? data : []))
+            .catch(err => {
+                if (err.name !== 'AbortError') setActiveStationKeystrokes([]);
+            });
+
+        return () => ac.abort();
+    }, [activeStation, timelineBaseEpochMs, totalTimelineDurationMs, keystrokeMode]);
 
     useEffect(() => {
         if (selectedStationIds.length === 1) {
@@ -251,7 +276,8 @@ export default function ExtractorAdvancedStudio() {
             viewportStartMs,
             isWorkspaceActive,
             isLooping,
-            playbackSpeed
+            playbackSpeed,
+            keystrokeMode
         });
     }, [
         timeRange,
@@ -266,7 +292,8 @@ export default function ExtractorAdvancedStudio() {
         isWorkspaceActive,
         isLooping,
         playbackSpeed,
-        timelineBaseEpochMs
+        timelineBaseEpochMs,
+        keystrokeMode
     ]);
 
     const handleLoadBookmark = useCallback((bm) => {
@@ -322,6 +349,10 @@ export default function ExtractorAdvancedStudio() {
             setSpotlightStationId(null);
         }
 
+        if (bm.keystrokeMode) {
+            setKeystrokeMode(bm.keystrokeMode);
+        }
+
         setIsWorkspaceActive(true);
         setIsDrawerOpen(false);
     }, []);
@@ -336,9 +367,15 @@ export default function ExtractorAdvancedStudio() {
         setPlayheadMs(newBuf);
     }, []);
 
-    const handleExecuteExport = async (keystrokeMode) => {
+    // 💡 ייצוא טקטי בלחיצה אחת (Zero-Friction WYSIWYG Export)
+    const handleExecuteExport = useCallback(async () => {
         const targetStationIds = timelineStations.map(s => s.id);
         if (targetStationIds.length === 0) return alert('No active stations selected in timeline.');
+
+        let numericMode = 2; // ברירת מחדל: BurnIn
+        if (keystrokeMode === 'NONE') numericMode = 0;
+        else if (keystrokeMode === 'CAPTION') numericMode = 1;
+        else if (keystrokeMode === 'BURN_IN') numericMode = 2;
 
         try {
             const response = await fetch('/api/v1/extractor-advanced/cut', {
@@ -348,16 +385,19 @@ export default function ExtractorAdvancedStudio() {
                     stationIds: targetStationIds,
                     inEpochMs: timelineBaseEpochMs + inPointMs,
                     outEpochMs: timelineBaseEpochMs + outPointMs,
-                    keystrokeMode: keystrokeMode
+                    keystrokeMode: numericMode
                 })
             });
+
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            // פתיחת המוניטור מיד למעקב אחר התקדמות הרינדור
             window.dispatchEvent(new CustomEvent('open-export-monitor'));
         } catch (error) {
             console.error('[Studio] Export failed:', error);
             alert('Failed to launch background export job.');
         }
-    };
+    }, [timelineStations, timelineBaseEpochMs, inPointMs, outPointMs, keystrokeMode]);
 
     const handleResetStudioSession = useCallback(() => {
         clearStudioSessionCache();
@@ -377,12 +417,14 @@ export default function ExtractorAdvancedStudio() {
         setSpotlightStationId(null);
         setIsPlaying(false);
         setPlaybackSpeed(1);
+        setKeystrokeMode('BURN_IN');
         resetZoom();
         setIsWorkspaceActive(false);
         setIsDrawerOpen(true);
     }, [resetZoom, setIsPlaying, setPlaybackSpeed, setPlayheadMs]);
 
     const isInitialSetup = !isWorkspaceActive || selectedStationIds.length === 0;
+    const currentPlayheadEpochMs = timelineBaseEpochMs + playheadMs;
 
     return (
         <div className="extractor-advanced-studio">
@@ -417,6 +459,7 @@ export default function ExtractorAdvancedStudio() {
                                     onOpenDrawer={() => setIsDrawerOpen(true)}
                                     baseEpochMs={timelineBaseEpochMs}
                                     playheadMs={playheadMs}
+                                    playheadEpochMs={currentPlayheadEpochMs}
                                     timeMode={timeMode}
                                     isPlaying={isPlaying}
                                     setIsPlaying={setIsPlaying}
@@ -427,6 +470,8 @@ export default function ExtractorAdvancedStudio() {
                                     globalGaps={globalGaps}
                                     recordingSegments={recordingSegments}
                                     playbackSpeed={playbackSpeed}
+                                    keystrokeMode={keystrokeMode}
+                                    keystrokes={activeStationKeystrokes}
                                 />
                                 <TransportBar
                                     baseEpochMs={timelineBaseEpochMs}
@@ -471,10 +516,13 @@ export default function ExtractorAdvancedStudio() {
                                     setOutPointMs={setOutPointMs}
                                     viewportStartMs={viewportStartMs}
                                     onViewportStartChange={setViewportStartMs}
-                                    onExport={() => setIsExportOptionsOpen(true)}
+                                    onExport={handleExecuteExport}
                                     recordingSegments={recordingSegments}
                                     movieBoundaries={movieBoundaries}
                                     onEstimateLoaded={(est) => est?.removedGlobalGaps && setGlobalGaps(est.removedGlobalGaps)}
+                                    keystrokeMode={keystrokeMode}
+                                    onChangeKeystrokeMode={setKeystrokeMode}
+                                    showKeystrokes={keystrokeMode !== 'NONE'}
                                 />
                             </div>
                         </div>
@@ -536,7 +584,8 @@ export default function ExtractorAdvancedStudio() {
                         .map(s => s.displayName || s.hostname || s.id),
                     allStationIds: allStations.map(s => s.id),
                     activeStationId,
-                    activeStationName: activeStation?.displayName || activeStation?.hostname || null
+                    activeStationName: activeStation?.displayName || activeStation?.hostname || null,
+                    keystrokeMode
                 }}
                 onLoadBookmark={handleLoadBookmark}
             />
@@ -565,6 +614,7 @@ export default function ExtractorAdvancedStudio() {
                 onViewportStartChange={setViewportStartMs}
                 playheadMs={playheadMs}
                 setPlayheadMs={setPlayheadMs}
+                playheadEpochMs={currentPlayheadEpochMs}
                 inPointMs={inPointMs}
                 setInPointMs={setInPointMs}
                 outPointMs={outPointMs}
@@ -577,15 +627,10 @@ export default function ExtractorAdvancedStudio() {
                 setIsLooping={setIsLooping}
                 playbackSpeed={playbackSpeed}
                 setPlaybackSpeed={setPlaybackSpeed}
-                onExport={() => setIsExportOptionsOpen(true)}
-            />
-
-            <ExportOptionsModal
-                isOpen={isExportOptionsOpen}
-                onClose={() => setIsExportOptionsOpen(false)}
-                onConfirm={handleExecuteExport}
-                title="ADVANCED STUDIO - SMART CUT"
-                summaryText={`Stations: ${timelineStations.length} | Range: ${((outPointMs - inPointMs) / 1000).toFixed(1)}s`}
+                onExport={handleExecuteExport}
+                keystrokeMode={keystrokeMode}
+                onChangeKeystrokeMode={setKeystrokeMode}
+                keystrokes={activeStationKeystrokes}
             />
 
             <ExportJobMonitor />

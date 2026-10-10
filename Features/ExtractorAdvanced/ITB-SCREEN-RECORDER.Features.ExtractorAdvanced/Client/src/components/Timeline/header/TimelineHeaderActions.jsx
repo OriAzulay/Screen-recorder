@@ -14,10 +14,44 @@ export default function TimelineHeaderActions({
     onContextualFit,
     onResetZoom,
     baseEpochMs,
-    timeMode
+    timeMode,
+    keystrokeMode = 'BURN_IN', // 'NONE' | 'CAPTION' | 'BURN_IN'
+    onChangeKeystrokeMode
 }) {
+    // מחזור מעבר בין 3 המצבים בלחיצה
+    const handleCycleKeystrokeMode = () => {
+        if (!onChangeKeystrokeMode) return;
+        if (keystrokeMode === 'NONE') onChangeKeystrokeMode('BURN_IN');
+        else if (keystrokeMode === 'BURN_IN') onChangeKeystrokeMode('CAPTION');
+        else onChangeKeystrokeMode('NONE');
+    };
+
+    const getModeLabel = () => {
+        switch (keystrokeMode) {
+            case 'BURN_IN': return 'KEYS: BURN-IN';
+            case 'CAPTION': return 'KEYS: CAPTION';
+            default: return 'KEYS: OFF';
+        }
+    };
+
     return (
         <div className="timeline-viewport-actions-group">
+            {/* 💡 כפתור טקטי תלת-מצבי לשליטה על ה-Keystroke Preview & Export Mode */}
+            {onChangeKeystrokeMode && (
+                <button
+                    type="button"
+                    className={`btn-vp-action keys-mode-btn mode-${keystrokeMode.toLowerCase()}`}
+                    onClick={handleCycleKeystrokeMode}
+                    title="Toggle Keystroke Export & Preview Mode (Off / Burn-in / Soft Caption)"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <rect x="2" y="4" width="20" height="16" rx="2" />
+                        <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M6 12h.01M10 12h.01M14 12h.01M18 12h.01M8 16h8" />
+                    </svg>
+                    <span>{getModeLabel()}</span>
+                </button>
+            )}
+
             {earliestMediaMs !== null && (
                 <button
                     type="button"
