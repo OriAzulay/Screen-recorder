@@ -13,7 +13,7 @@ using ITB_SCREEN_RECORDER.Core.Contracts.Network;
 using ITB_SCREEN_RECORDER.Core.Configuration;
 using ITB_SCREEN_RECORDER.Core.Common;
 
-namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
+namespace ITB_SCREEN_RECORDER.AgentService
 {
     public class OfflineBufferDrainingService : BackgroundService
     {
@@ -59,7 +59,6 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
 
             if (Uri.TryCreate(url, UriKind.Absolute, out Uri? parsedUri))
             {
-                // מחלץ רק את Scheme + Host + Port (למשל: http://127.0.0.1:5090)
                 string baseAuthority = parsedUri.GetLeftPart(UriPartial.Authority);
                 return $"{baseAuthority.TrimEnd('/')}/api/v1/agent/upload-buffer";
             }

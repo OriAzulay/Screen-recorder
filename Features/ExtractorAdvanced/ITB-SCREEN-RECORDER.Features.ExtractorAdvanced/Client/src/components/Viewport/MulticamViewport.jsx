@@ -31,6 +31,7 @@ export default function MulticamViewport({
     timelineStations = [],
     onSelectActiveStation,
     onOpenSpotlight,
+    onStationContextMenu, // 💡 פרופ חדש
     baseEpochMs = 0,
     playheadMs = 0,
     playheadEpochMs = 0,
@@ -207,7 +208,6 @@ export default function MulticamViewport({
                             showWatermark={false}
                         />
 
-                        {/* 💡 הצגת שכבת ה-HUD מעל הווידאו בנגן בהתאם למצב הנבחר */}
                         <KeystrokePlaybackOverlay
                             currentEpochMs={currentEpochMs}
                             keystrokes={keystrokes}
@@ -295,25 +295,31 @@ export default function MulticamViewport({
 
             <div className="multicam-tactical-grid" ref={containerRef} style={gridStyle}>
                 {visibleStations.map(st => (
-                    <CameraCard
+                    <div
                         key={st.id}
-                        station={st}
-                        isSolo={false}
-                        currentEpochMs={currentEpochMs}
-                        timeMode={timeMode}
-                        isPlaying={isPlaying}
-                        setIsPlaying={setIsPlaying}
-                        baseEpochMs={baseEpochMs}
-                        totalDurationMs={totalDurationMs}
-                        outPointMs={outPointMs}
-                        setPlayheadMs={setPlayheadMs}
-                        isSpotlightActive={isSpotlightActive}
-                        globalGaps={globalGaps}
-                        onOpenSpotlight={onOpenSpotlight}
-                        onSelectActiveStation={onSelectActiveStation}
-                        recordingSegments={recordingSegments}
-                        playbackSpeed={playbackSpeed}
-                    />
+                        className="multicam-card-cell-wrapper"
+                        onContextMenu={(e) => onStationContextMenu && onStationContextMenu(e, st)}
+                        style={{ width: '100%', height: '100%', minWidth: 0, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                        <CameraCard
+                            station={st}
+                            isSolo={false}
+                            currentEpochMs={currentEpochMs}
+                            timeMode={timeMode}
+                            isPlaying={isPlaying}
+                            setIsPlaying={setIsPlaying}
+                            baseEpochMs={baseEpochMs}
+                            totalDurationMs={totalDurationMs}
+                            outPointMs={outPointMs}
+                            setPlayheadMs={setPlayheadMs}
+                            isSpotlightActive={isSpotlightActive}
+                            globalGaps={globalGaps}
+                            onOpenSpotlight={onOpenSpotlight}
+                            onSelectActiveStation={onSelectActiveStation}
+                            recordingSegments={recordingSegments}
+                            playbackSpeed={playbackSpeed}
+                        />
+                    </div>
                 ))}
             </div>
         </div>

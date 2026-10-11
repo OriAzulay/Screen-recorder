@@ -16,8 +16,9 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
         protected readonly ExtractorOptions Options;
         protected readonly ILogger<FfmpegBinaryResolver> Logger;
 
-        private FfmpegHardwareCapabilities? _cachedCapabilities;
-        private readonly object _probeLock = new();
+        // 💡 בדיקה חד-פעמית ברמת התהליך (Static Process-Wide Cache): לעולם לא נבדק שוב לאחר העלייה הראשונה
+        private static FfmpegHardwareCapabilities? _cachedCapabilities;
+        private static readonly object _probeLock = new();
 
         public FfmpegBinaryResolver(IOptions<ExtractorOptions> options, ILogger<FfmpegBinaryResolver> logger)
         {
@@ -91,31 +92,45 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 
         public string GetOptimalVideoEncoderArgs(int? bitrateKbps = null)
         {
+            return GetOptimalVideoEncoderArgs(bitrateKbps, zeroLatency: false);
+        }
+
+        public string GetOptimalVideoEncoderArgs(bool zeroLatency)
+        {
+            return GetOptimalVideoEncoderArgs(bitrateKbps: null, zeroLatency: zeroLatency);
+        }
+
+        public string GetOptimalVideoEncoderArgs(int? bitrateKbps, bool zeroLatency)
+        {
             var caps = GetCapabilities();
+            string baseArgs = zeroLatency ? caps.ZeroLatencyEncoderArgs : caps.EncoderArgs;
+
             if (bitrateKbps.HasValue && bitrateKbps.Value > 0)
             {
-                return $"{caps.EncoderArgs} -b:v {bitrateKbps.Value}k";
+                return $"{baseArgs} -b:v {bitrateKbps.Value}k";
             }
-            return caps.EncoderArgs;
+            return baseArgs;
         }
 
         /// <summary>
-        /// דוגם את כרטיסי המסך הזמינים באמצעות ריצת מבחן זעירה (100ms) של פריים סינתטי
+        /// דוגם את כרטיסי המסך הזמינים באמצעות ריצת מבחן זעירה (100ms) של פריים סינתטי פעם אחת בלבד
         /// </summary>
         protected virtual FfmpegHardwareCapabilities ProbeHardwareCapabilities()
         {
             string ffmpegPath = ResolveFfmpeg();
-            Logger.LogInformation("[FFmpeg Resolver] Probing hardware encoder capabilities with binary: {Path}", ffmpegPath);
+            Logger.LogInformation("[FFmpeg Resolver] Probing hardware encoder capabilities once with binary: {Path}", ffmpegPath);
 
             // 1. בדיקת NVIDIA NVENC (CUDA)
             if (TestSyntheticEncoder(ffmpegPath, "-hwaccel cuda", "h264_nvenc"))
             {
-                Logger.LogInformation("[FFmpeg Resolver] >>> NVIDIA GPU acceleration verified: h264_nvenc will be utilized for all transcoding pipelines.");
+                Logger.LogInformation("[FFmpeg Resolver] >>> NVIDIA GPU acceleration verified: h264_nvenc engaged.");
                 return new FfmpegHardwareCapabilities
                 {
                     HardwareType = "NVIDIA NVENC",
                     VideoEncoder = "h264_nvenc",
                     EncoderArgs = "-c:v h264_nvenc -preset p4 -tune ll -rc vbr -cq 20",
+                    ZeroLatencyEncoderArgs = "-c:v h264_nvenc -preset p1 -tune zerolatency -zerolatency 1 -rc cbr -pix_fmt yuv420p",
+                    HwaccelDecodeArgs = "-hwaccel cuda",
                     IsGpuAccelerated = true
                 };
             }
@@ -123,12 +138,14 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
             // 2. בדיקת Intel QuickSync (QSV)
             if (TestSyntheticEncoder(ffmpegPath, "-hwaccel qsv", "h264_qsv"))
             {
-                Logger.LogInformation("[FFmpeg Resolver] >>> Intel QSV hardware acceleration verified: h264_qsv will be utilized.");
+                Logger.LogInformation("[FFmpeg Resolver] >>> Intel QSV hardware acceleration verified: h264_qsv engaged.");
                 return new FfmpegHardwareCapabilities
                 {
                     HardwareType = "Intel QSV",
                     VideoEncoder = "h264_qsv",
                     EncoderArgs = "-c:v h264_qsv -preset veryfast -global_quality 20",
+                    ZeroLatencyEncoderArgs = "-c:v h264_qsv -preset veryfast -pix_fmt yuv420p",
+                    HwaccelDecodeArgs = "-hwaccel qsv",
                     IsGpuAccelerated = true
                 };
             }
@@ -140,6 +157,8 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 HardwareType = "CPU",
                 VideoEncoder = "libx264",
                 EncoderArgs = "-c:v libx264 -preset veryfast -crf 20",
+                ZeroLatencyEncoderArgs = "-c:v libx264 -preset ultrafast -tune zerolatency -threads 2 -pix_fmt yuv420p",
+                HwaccelDecodeArgs = "-hwaccel auto",
                 IsGpuAccelerated = false
             };
         }
@@ -148,7 +167,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
         {
             try
             {
-                // ריצה של 100ms בזיכרון (-f null -) שמוודאת שהדרייבר אינו קורס בעת הקצאת Session
                 string args = $"{hwaccel} -f lavfi -i color=c=black:s=64x64:d=0.1 -c:v {encoder} -f null -";
                 var psi = new ProcessStartInfo
                 {

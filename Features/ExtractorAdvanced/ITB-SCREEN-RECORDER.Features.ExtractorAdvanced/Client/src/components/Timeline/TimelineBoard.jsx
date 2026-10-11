@@ -3,23 +3,15 @@
 // ==========================================
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
-// 💡 ייבוא רכיבי הסרגל העליון (header)
 import TimelineRuler from './header/TimelineRuler.jsx';
 import SessionClockBadge from './header/SessionClockBadge.jsx';
 import TimelineMinimap from './header/TimelineMinimap.jsx';
 import TimelineHeaderActions from './header/TimelineHeaderActions.jsx';
-
-// 💡 ייבוא שכבת הערוצים (tracks)
 import TimelineTrack from './tracks/TimelineTrack.jsx';
-
-// 💡 ייבוא שכבות מרחפות (overlays)
 import Playhead from './overlays/Playhead.jsx';
 import TimelineContextMenu from './overlays/TimelineContextMenu.jsx';
-
-// 💡 ייבוא כפתור ייצוא (export)
 import TimelineVerticalExportBtn from './export/TimelineVerticalExportBtn.jsx';
 
-// 💡 ייבוא Hooks ייעודיים
 import { useTimelineEstimate } from './hooks/useTimelineEstimate.js';
 import { useTimelineDrag } from './hooks/useTimelineDrag.js';
 
@@ -31,6 +23,7 @@ export default function TimelineBoard({
     stations = [],
     activeStationId,
     onSelectActiveStation,
+    onStationContextMenu, // 💡 פרופ חדש
     baseEpochMs = 0,
     timeMode = 'LOCAL',
     totalDurationMs = 3600000,
@@ -164,7 +157,6 @@ export default function TimelineBoard({
                             onStartDragMinimap={handleStartDrag}
                         />
 
-                        {/* 💡 העברת מצב המקלדת ומחזור המצבים לכפתור ה-Header */}
                         <TimelineHeaderActions
                             earliestMediaMs={earliestMediaMs}
                             latestMediaMs={latestMediaMs}
@@ -263,6 +255,7 @@ export default function TimelineBoard({
                                 station={station}
                                 isActive={station.id === activeStationId}
                                 onSelect={() => onSelectActiveStation?.(station.id)}
+                                onStationContextMenu={onStationContextMenu} // 💡 העברה לטראק
                                 viewportStartMs={viewportStartMs}
                                 viewportDurationMs={viewportDurationMs}
                                 inPointMs={inPointMs}

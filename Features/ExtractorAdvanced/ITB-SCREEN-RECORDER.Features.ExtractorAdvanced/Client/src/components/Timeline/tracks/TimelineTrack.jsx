@@ -31,6 +31,7 @@ export default function TimelineTrack({
     station,
     isActive,
     onSelect,
+    onStationContextMenu, // 💡 פרופ חדש
     viewportStartMs = 0,
     viewportDurationMs = 3600000,
     inPointMs,
@@ -44,7 +45,6 @@ export default function TimelineTrack({
     const [tilesMap, setTilesMap] = useState({});
     const hostname = station?.hostname || station?.id || station?.name || '';
 
-    // 💡 שימוש ישיר בנתוני המקטעים שכבר נשלפו בריכוז על ידי האב - ללא קריאות HTTP כפולות
     const activeSegments = useMemo(() => {
         const stationSegs = recordingSegments[hostname] || rawSegments || [];
         if (!stationSegs || stationSegs.length === 0) return [];
@@ -56,7 +56,6 @@ export default function TimelineTrack({
 
     const lodConfig = useMemo(() => getLodConfig(viewportDurationMs), [viewportDurationMs]);
 
-    // שליפת פריימים עבור Filmstrip רק לתחנה הפעילה (חיסכון רוחב פס משמעותי)
     const timelineTiles = useMemo(() => {
         if (disableFilmstrip || activeSegments.length === 0 || !baseEpochMs || viewportDurationMs <= 0) return [];
 
@@ -311,8 +310,19 @@ export default function TimelineTrack({
     const stationName = station?.displayName || station?.hostname || station?.name || '';
 
     return (
-        <div onClick={onSelect} className={`timeline-track-container ${isActive ? 'active-track' : 'collapsed-track'}`}>
-            <div className="track-sidebar">
+        <div
+            onClick={onSelect}
+            onContextMenu={(e) => {
+                // 💡 קליק ימני על כל שטח השורה של התחנה בטיים-ליין
+                if (onStationContextMenu) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onStationContextMenu(e, station);
+                }
+            }}
+            className={`timeline-track-container ${isActive ? 'active-track' : 'collapsed-track'}`}
+        >
+            <div className="track-sidebar" title={`Right-click to deselect ${stationName}`}>
                 <div className={`status-indicator ${station?.isOnline ? 'online' : 'idle'}`} />
                 <span className="station-label" title={stationName}>{stationName}</span>
             </div>

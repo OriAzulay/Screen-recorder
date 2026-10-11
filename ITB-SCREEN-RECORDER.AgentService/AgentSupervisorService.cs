@@ -106,7 +106,7 @@ namespace ITB_SCREEN_RECORDER.AgentService
             };
 
             _localBufferPath = string.IsNullOrWhiteSpace(_config.LocalBufferPath)
-                ? @"C:\ProgramData\ITB-SCREEN-RECORDER\Buffer"
+                ? (OperatingSystem.IsWindows() ? @"C:\ProgramData\ITB-SCREEN-RECORDER\Buffer" : "/var/lib/itb-screen-recorder/buffer")
                 : _config.LocalBufferPath;
 
             _workerPath = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "ITB-SCREEN-RECORDER.AgentWorker.exe" : "ITB-SCREEN-RECORDER.AgentWorker");
@@ -318,8 +318,8 @@ namespace ITB_SCREEN_RECORDER.AgentService
                 try
                 {
                     var bufferStats = OfflineBufferDrainingService.GetBufferStats(_localBufferPath);
-                    offlineFilesCount = bufferStats.Item1;
-                    offlineFilesSizeMb = bufferStats.Item2;
+                    offlineFilesCount = bufferStats.Count;
+                    offlineFilesSizeMb = bufferStats.SizeMb;
                 }
                 catch { }
 

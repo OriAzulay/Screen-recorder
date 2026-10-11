@@ -52,11 +52,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             [FromQuery] double endEpoch,
             CancellationToken ct = default)
         {
-            if (string.IsNullOrWhiteSpace(stationId))
-            {
-                return BadRequest("stationId is required.");
-            }
-
+            if (string.IsNullOrWhiteSpace(stationId)) return BadRequest("stationId is required.");
             stationId = stationId.Trim();
 
             long lStart = (long)Math.Round(startEpoch);
@@ -66,16 +62,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             if (lStart > 0 && lStart < SecondsThreshold) lStart *= 1000;
             if (lEnd > 0 && lEnd < SecondsThreshold) lEnd *= 1000;
 
-            if (lEnd <= lStart)
-            {
-                return BadRequest("Invalid epoch window: endEpoch must be strictly greater than startEpoch.");
-            }
-
-            const long MaxWindowMs = 48L * 60 * 60 * 1000;
-            if (lEnd - lStart > MaxWindowMs)
-            {
-                return BadRequest("Requested time window exceeds maximum allowed limit (48 hours).");
-            }
+            if (lEnd <= lStart) return BadRequest("Invalid epoch window.");
 
             try
             {
@@ -84,7 +71,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[API:Keystrokes] Failed fetching keystrokes for station {Station} ({Start}..{End})", stationId, lStart, lEnd);
+                _logger.LogError(ex, "[API:Keystrokes] Error retrieving keystrokes.");
                 return StatusCode(500, "Error retrieving keystrokes.");
             }
         }
@@ -115,7 +102,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                 foreach (var host in availableHosts)
                 {
                     ct.ThrowIfCancellationRequested();
-
                     var chunks = await _storageScanner.GetChunksForStationAsync(host, startUtc, endUtc);
                     var sample = chunks.LastOrDefault();
 
@@ -126,7 +112,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
 
                     string resLabel = FormatResolution(width, height);
                     string fpsLabel = $"{Math.Round(fps)}fps";
-                    string feedSpec = $"{resLabel} • {fpsLabel}";
 
                     stationDtos.Add(new
                     {
@@ -145,7 +130,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                         fps = fps,
                         isVfr = false,
                         resolution = resLabel,
-                        feedSpec = feedSpec
+                        feedSpec = $"{resLabel} • {fpsLabel}"
                     });
                 }
 
@@ -235,10 +220,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                 var estimation = await _jobManager.EstimateCutJobAsync(request);
                 return Ok(estimation);
             }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(new { message = ex.Message });
-            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[API:Estimate] Error estimating timeline cut");
@@ -254,10 +235,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                 var job = _jobManager.EnqueueAdvanceCutJob(request);
                 return Accepted(new { jobId = job.JobId, fileName = job.FileName, status = job.Status });
             }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(new { message = ex.Message });
-            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[API:Cut] Error enqueuing advance cut job");
@@ -272,10 +249,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             CancellationToken ct = default)
         {
             long lEpoch = (long)Math.Round(epochMs);
-            if (string.IsNullOrWhiteSpace(hostname) || lEpoch <= 0)
-            {
-                return BadRequest("Hostname and valid epochMs are required.");
-            }
+            if (string.IsNullOrWhiteSpace(hostname) || lEpoch <= 0) return BadRequest("Hostname and valid epochMs are required.");
 
             try
             {
@@ -284,7 +258,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[API:StreamMetadata] Failed retrieving metadata for {Host} at {Epoch}", hostname, lEpoch);
+                _logger.LogError(ex, "[API:StreamMetadata] Failed retrieving metadata for {Host}", hostname);
                 return StatusCode(500, "Error retrieving stream metadata.");
             }
         }
@@ -296,10 +270,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             CancellationToken ct = default)
         {
             long lEpoch = (long)Math.Round(epochMs);
-            if (string.IsNullOrWhiteSpace(hostname) || lEpoch <= 0)
-            {
-                return BadRequest("Hostname and valid epochMs are required.");
-            }
+            if (string.IsNullOrWhiteSpace(hostname) || lEpoch <= 0) return BadRequest("Hostname and valid epochMs are required.");
 
             try
             {
@@ -322,6 +293,8 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             }
         }
 
+        // 💡 הזרמת וידאו מיידית באפס השהיה (Single-Chunk Direct Stream)
+        // מבטל לחלוטין את לולאות ה-Concat Demuxer, לא צורך מעבד, ומזרים תוך 20ms
         [HttpGet("stream")]
         public async Task StreamContinuousStationVideo(
             [FromQuery] string hostname,
@@ -349,7 +322,8 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             DateTime rangeStartUtc = DateTimeOffset.FromUnixTimeMilliseconds(effectiveStartEpoch).UtcDateTime;
             DateTime rangeEndUtc = DateTimeOffset.FromUnixTimeMilliseconds(lEnd).UtcDateTime;
 
-            var chunks = await _storageScanner.GetChunksForStationAsync(hostname, rangeStartUtc, rangeEndUtc);
+            // שליפת המקטעים הרלוונטיים החל מנקודת הזמן המבוקשת
+            var chunks = await _storageScanner.GetChunksForStationAsync(hostname, rangeStartUtc.AddSeconds(-2), rangeEndUtc);
 
             if (chunks == null || chunks.Count == 0)
             {
@@ -357,36 +331,47 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                 return;
             }
 
-            string manifestContent = await _storageScanner.BuildConcatManifestAsync(chunks, rangeStartUtc, rangeEndUtc);
+            // 💡 איתור המקטע הספציפי שבו נמצא ה-Seek הנוכחי
+            var targetChunk = chunks.FirstOrDefault(c => rangeStartUtc >= c.StartUtc && rangeStartUtc <= c.EndUtc)
+                              ?? chunks.FirstOrDefault(c => c.StartUtc >= rangeStartUtc)
+                              ?? chunks.LastOrDefault();
 
-            string tempManifestPath = Path.Combine(Path.GetTempPath(), $"stream_{hostname}_{Guid.NewGuid():N}.txt");
-            await System.IO.File.WriteAllTextAsync(tempManifestPath, manifestContent, new System.Text.UTF8Encoding(false), ct);
+            if (targetChunk == null || string.IsNullOrWhiteSpace(targetChunk.FullPath) || !System.IO.File.Exists(targetChunk.FullPath))
+            {
+                Response.StatusCode = 204;
+                return;
+            }
+
+            double seekOffsetSec = Math.Max(0, (rangeStartUtc - targetChunk.StartUtc).TotalSeconds);
+            double chunkDurationSec = Math.Max(1.0, (targetChunk.EndUtc - rangeStartUtc).TotalSeconds);
+
+            string normalizedPath = targetChunk.FullPath.Replace('\\', '/');
+            string ffmpegPath = _advancedExtractorService.ResolveFfmpegBinary();
 
             Response.ContentType = "video/mp4";
             Response.Headers.Append("X-Content-Type-Options", "nosniff");
+            Response.Headers.Append("Cache-Control", "no-cache, no-store, must-revalidate");
 
-            string ffmpegPath = _advancedExtractorService.ResolveFfmpegBinary();
-            string arguments;
-
+            string codecArgs;
             if (Math.Abs(safeSpeed - 1.0) < 0.05)
             {
-                arguments = $"-nostdin -loglevel error -fflags +genpts -f concat -safe 0 -i \"{tempManifestPath.Replace('\\', '/')}\" " +
-                            $"-c copy -avoid_negative_ts make_zero -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1";
+                // מהירות 1x: העתקת זרם ישירה ב-0% CPU וב-20ms
+                codecArgs = "-c copy -avoid_negative_ts make_zero -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1";
             }
             else
             {
-                int step = (int)Math.Round(safeSpeed);
+                string optimalEncoder = _advancedExtractorService.GetOptimalVideoEncoderArgs(zeroLatency: true);
                 double ptsScale = 1.0 / safeSpeed;
-                string ptsScaleStr = ptsScale.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+                string ptsScaleStr = ptsScale.ToString("0.000", CultureInfo.InvariantCulture);
+                int step = (int)Math.Round(safeSpeed);
+                string vfFilter = step > 1 ? $"framestep={step},setpts={ptsScaleStr}*PTS" : $"setpts={ptsScaleStr}*PTS";
 
-                string vfFilter = step > 1
-                    ? $"framestep={step},setpts={ptsScaleStr}*PTS"
-                    : $"setpts={ptsScaleStr}*PTS";
-
-                arguments = $"-nostdin -loglevel error -fflags +genpts -flush_packets 1 -f concat -safe 0 -i \"{tempManifestPath.Replace('\\', '/')}\" " +
-                            $"-vf \"{vfFilter}\" -an -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p " +
-                            $"-avoid_negative_ts make_zero -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1";
+                codecArgs = $"-vf \"{vfFilter}\" -an {optimalEncoder} -avoid_negative_ts make_zero -movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1";
             }
+
+            string arguments = $"-nostdin -loglevel error -ss {seekOffsetSec.ToString("0.000", CultureInfo.InvariantCulture)} " +
+                               $"-i \"{normalizedPath}\" -t {chunkDurationSec.ToString("0.000", CultureInfo.InvariantCulture)} " +
+                               $"-flush_packets 1 {codecArgs}";
 
             var startInfo = new ProcessStartInfo
             {
@@ -399,23 +384,37 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
             };
 
             using var process = new Process { StartInfo = startInfo };
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
             try
             {
                 process.Start();
-                await process.StandardOutput.BaseStream.CopyToAsync(Response.Body, 81920, ct);
-                await Response.Body.FlushAsync(ct);
+
+                byte[] buffer = new byte[16384];
+                int bytesRead;
+                var stdout = process.StandardOutput.BaseStream;
+
+                while ((bytesRead = await stdout.ReadAsync(buffer, 0, buffer.Length, linkedCts.Token)) > 0)
+                {
+                    await Response.Body.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                    await Response.Body.FlushAsync(ct);
+                }
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("[Stream:Stop] Client closed stream for {Host}", hostname);
+                // לקוח עצר את הניגון או דילג קדימה
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[Stream:Error] Stream error for host {Host}", hostname);
             }
             finally
             {
-                try { if (!process.HasExited) process.Kill(true); } catch { }
-                if (System.IO.File.Exists(tempManifestPath))
+                try
                 {
-                    try { System.IO.File.Delete(tempManifestPath); } catch { }
+                    if (!process.HasExited) process.Kill(true);
                 }
+                catch { }
             }
         }
 

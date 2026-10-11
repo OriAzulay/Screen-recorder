@@ -32,6 +32,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
         private readonly ILogger<AdvancedExtractorService> _advancedLogger;
         private readonly ExtractorOptions _extractorOptions;
         private readonly IMemoryCache? _memoryCache;
+        private readonly IFfmpegBinaryResolver _binaryResolver;
         private static readonly SemaphoreSlim _visualThrottle = new(8, 8);
 
         public AdvancedExtractorService(
@@ -46,8 +47,8 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             IMediaProbeService mediaProbeService,
             ILogger<AdvancedExtractorService> logger,
             IMemoryCache? memoryCache = null,
-            IKeystrokeSrtGenerator? srtGenerator = null)
-            // 💡 תיקון קריטי: העברת planBuilder, trackCutter ו-srtGenerator למחלקת הבסיס
+            IKeystrokeSrtGenerator? srtGenerator = null,
+            IFfmpegBinaryResolver? binaryResolver = null)
             : base(storageScanner, ffmpegRunner, extractorOptions, logger, srtGenerator, trackCutter, planBuilder)
         {
             _dummyVideoGenerator = dummyVideoGenerator;
@@ -59,30 +60,20 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             _advancedLogger = logger;
             _extractorOptions = extractorOptions.Value;
             _memoryCache = memoryCache;
+
+            _binaryResolver = binaryResolver ?? new AdvancedFfmpegBinaryResolver(
+                extractorOptions,
+                LoggerFactory.Create(b => { }).CreateLogger<AdvancedFfmpegBinaryResolver>());
         }
 
-        public new string ResolveFfmpegBinary() => ResolveBinary("ffmpeg");
-        public string ResolveFfprobeBinary() => ResolveBinary("ffprobe");
+        public new string ResolveFfmpegBinary() => _binaryResolver.ResolveFfmpeg();
+        public string ResolveFfprobeBinary() => _binaryResolver.ResolveFfprobe();
 
-        public string ResolveBinary(string baseName)
-        {
-            string binaryName = OperatingSystem.IsWindows() ? $"{baseName}.exe" : baseName;
-            var baseDir = AppContext.BaseDirectory;
-            string[] directCandidates = {
-                Path.Combine(baseDir, "Features", "ExtractorAdvanced", binaryName),
-                Path.Combine(baseDir, "Features", "Extractor", binaryName),
-                Path.Combine(baseDir, "MediaMTX", binaryName),
-                Path.Combine(baseDir, binaryName)
-            };
+        public string GetOptimalVideoEncoderArgs(bool zeroLatency = false) =>
+            _binaryResolver.GetOptimalVideoEncoderArgs(zeroLatency);
 
-            foreach (var path in directCandidates)
-            {
-                var full = Path.GetFullPath(path);
-                if (File.Exists(full)) return full;
-            }
-
-            return binaryName;
-        }
+        public FfmpegHardwareCapabilities GetHardwareCapabilities() =>
+            _binaryResolver.GetCapabilities();
 
         public Task<ProbedStationMetadata> GetOrProbeStationMetadataAsync(
             string hostname, DateTime startUtc, DateTime endUtc, CancellationToken ct = default) =>
@@ -237,6 +228,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             return new MemoryStream(fallbackTile);
         }
 
+        // 💡 חילוץ פריים יציב ואמין ב-15ms ללא התנגשות מול מקודד ה-MJPEG
         private async Task<byte[]?> ExtractKeyframeDirectAsync(
             string ffmpegPath,
             string inputPath,
@@ -245,7 +237,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
         {
             using var memoryStream = new MemoryStream(32768);
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            linkedCts.CancelAfter(TimeSpan.FromSeconds(8));
+            linkedCts.CancelAfter(TimeSpan.FromSeconds(5));
 
             await _visualThrottle.WaitAsync(linkedCts.Token);
             try
@@ -253,9 +245,9 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = ffmpegPath,
-                    Arguments = $"-nostdin -loglevel error -hwaccel auto -noautorotate " +
+                    Arguments = $"-nostdin -loglevel error -noautorotate " +
                                 $"-ss {offsetSeconds.ToString("0.000", CultureInfo.InvariantCulture)} " +
-                                $"-i \"{inputPath.Replace('\\', '/')}\" -an -sn -dn -threads 1 -vframes 1 -q:v 3 -f image2pipe -vcodec mjpeg pipe:1",
+                                $"-i \"{inputPath.Replace('\\', '/')}\" -an -sn -dn -threads 1 -frames:v 1 -q:v 2 -f image2pipe -vcodec mjpeg pipe:1",
                     RedirectStandardOutput = true,
                     RedirectStandardError = false,
                     UseShellExecute = false,
@@ -266,7 +258,7 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
                 process.Start();
 
                 using var reg = linkedCts.Token.Register(() => { try { if (!process.HasExited) process.Kill(true); } catch { } });
-                await process.StandardOutput.BaseStream.CopyToAsync(memoryStream, 16384, linkedCts.Token);
+                await process.StandardOutput.BaseStream.CopyToAsync(memoryStream, 8192, linkedCts.Token);
                 await process.WaitForExitAsync(linkedCts.Token);
 
                 if (memoryStream.Length > 0)

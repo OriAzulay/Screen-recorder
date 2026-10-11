@@ -1,7 +1,9 @@
-﻿// Client/src/App.scss
+﻿// ==========================================
+// File: ClientApp/src/App.scss
+// ==========================================
 
 /* ==========================================================================
-   1. איפוס גלובלי והגדרת סביבת C2 טקטית (Global Canvas Reset)
+   1. Global Reset & Tactical C2 Canvas Shell
    ========================================================================== */
 html, body, #root {
     background-color: var(--bg-app, #070A10) !important;
@@ -28,10 +30,18 @@ html, body, #root {
     height: 100vh;
     overflow: hidden;
     background-color: var(--bg-app, #070A10);
+    transition: filter 0.4s ease, transform 0.4s ease;
+    /* Deep background blur when disconnect modal is visible */
+    &.is-server-blurred .itb-command-center-app {
+        filter: blur(14px) brightness(0.45);
+        pointer-events: none;
+        user-select: none;
+        transition: filter 0.35s ease;
+    }
 }
 
 /* ==========================================================================
-   2. שכבות עומק דינמיות מקומיות (Dynamic Scrim Architecture)
+   2. Dynamic Scrim Layer Architecture
    ========================================================================== */
 .dynamic-wallpaper-layer {
     position: fixed;
@@ -55,7 +65,7 @@ html, body, #root {
 }
 
 /* ==========================================================================
-   3. מעטפת האפליקציה הראשית (Command Center Canvas Shell)
+   3. Main App Canvas Shell
    ========================================================================== */
 .itb-command-center-app {
     position: relative;
@@ -67,6 +77,7 @@ html, body, #root {
     background: transparent !important;
     overflow: hidden;
     padding-bottom: 2rem;
+    transition: filter 0.3s ease;
 
     &::before {
         content: '';
@@ -85,7 +96,7 @@ html, body, #root {
 }
 
 /* ==========================================================================
-   4. סקרולבר טקטי נקי (Tactical Glass Scrollbar)
+   4. Tactical Scrollbar
    ========================================================================== */
 ::-webkit-scrollbar {
     width: 7px;
@@ -108,7 +119,7 @@ html, body, #root {
 }
 
 /* ==========================================================================
-   5. סגנונות בסיס מותאמים לקריאות ממסך מרוחק וקירות תצוגה
+   5. Top Bar & Typography
    ========================================================================== */
 .command-center-top-bar {
     padding: 0.75rem 1.6rem;
@@ -263,5 +274,260 @@ html, body, #root {
             min-height: 40px;
             border-radius: var(--radius-controls, 8px);
         }
+    }
+}
+
+/* ==========================================================================
+   6. Tactical C2 Disconnection Modal (LTR Layout & Glass Blur)
+   ========================================================================== */
+.tactical-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(3, 7, 18, 0.65);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    animation: modalBackdropFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.tactical-disconnect-modal-card {
+    position: relative;
+    width: 90%;
+    max-width: 520px;
+    background: rgba(15, 23, 42, 0.88);
+    backdrop-filter: blur(32px);
+    -webkit-backdrop-filter: blur(32px);
+    border: 1px solid rgba(239, 68, 68, 0.45);
+    border-radius: var(--radius-card, 16px);
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85), 0 0 35px rgba(239, 68, 68, 0.25);
+    box-sizing: border-box;
+    overflow: hidden;
+    animation: modalPopIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+
+    .modal-top-accent-bar {
+        width: 100%;
+        height: 4px;
+        background: linear-gradient(90deg, #EF4444 0%, #DC2626 50%, #EF4444 100%);
+        box-shadow: 0 0 12px rgba(239, 68, 68, 0.8);
+    }
+
+    .modal-header-section {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 24px 28px 16px 28px;
+
+        .disconnect-radar-emitter {
+            position: relative;
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+
+            .radar-ring {
+                position: absolute;
+                inset: 0;
+                border-radius: 50%;
+                border: 2px solid var(--accent-rose, #EF4444);
+                animation: radarPulseDot 1.6s infinite ease-out;
+            }
+
+            .radar-core-dot {
+                width: 14px;
+                height: 14px;
+                border-radius: 50%;
+                background: var(--accent-rose, #EF4444);
+                box-shadow: 0 0 14px var(--accent-rose, #EF4444);
+            }
+        }
+
+        .modal-title-group {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+
+            .modal-sub-tag {
+                font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                font-size: 10.5px;
+                font-weight: 800;
+                color: var(--c2-red-light, #F87171);
+                letter-spacing: 1.2px;
+            }
+
+            .modal-main-title {
+                margin: 0;
+                font-family: var(--font-primary, 'Inter', sans-serif);
+                font-size: 1.35rem;
+                font-weight: 900;
+                letter-spacing: 0.5px;
+                color: #FFFFFF;
+            }
+        }
+    }
+
+    .modal-body-section {
+        padding: 0 28px 24px 28px;
+
+        .modal-explanation {
+            margin: 0 0 18px 0;
+            color: var(--text-secondary, #94A3B8);
+            font-size: 13.5px;
+            line-height: 1.55;
+            direction: ltr;
+            text-align: left;
+        }
+
+        .disconnect-diagnostics-box {
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-controls, 8px);
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+
+            .diag-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                font-size: 12px;
+
+                .diag-label {
+                    font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                    font-weight: 800;
+                    color: var(--text-muted, #64748B);
+                    font-size: 11px;
+                    letter-spacing: 0.5px;
+                }
+
+                .diag-val {
+                    font-weight: 700;
+
+                    &.red {
+                        color: var(--c2-red-light, #F87171);
+                        font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                    }
+
+                    &.mono {
+                        font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                        color: #FFFFFF;
+                    }
+
+                    &.cyan {
+                        color: var(--accent-cyan-light, #38BDF8);
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                        font-size: 11.5px;
+
+                        .spinning-dot {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 50%;
+                            background: var(--accent-cyan-light, #38BDF8);
+                            box-shadow: 0 0 8px var(--accent-cyan-light);
+                            animation: radarPulseDot 1.2s infinite ease-out;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    .modal-actions-section {
+        padding: 16px 28px 24px 28px;
+        background: rgba(0, 0, 0, 0.25);
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        display: flex;
+        justify-content: stretch;
+
+        .btn-modal-reconnect {
+            width: 100%;
+            height: 44px;
+            background: linear-gradient(180deg, rgba(239, 68, 68, 0.3) 0%, rgba(185, 28, 28, 0.5) 100%);
+            border: 1px solid var(--accent-rose, #EF4444);
+            border-radius: var(--radius-controls, 8px);
+            color: #FFFFFF;
+            font-family: var(--font-primary, 'Inter', sans-serif);
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            transition: all 0.2s ease;
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.25);
+
+            &:hover:not(:disabled) {
+                background: var(--accent-rose, #EF4444);
+                box-shadow: 0 0 24px rgba(239, 68, 68, 0.6);
+                transform: translateY(-1px);
+            }
+
+            &:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+            }
+
+            .action-spinner {
+                width: 14px;
+                height: 14px;
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-top-color: #FFFFFF;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+        }
+    }
+}
+
+/* ==========================================================================
+   7. Global Animations
+   ========================================================================== */
+@keyframes modalBackdropFadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes modalPopIn {
+    from {
+        opacity: 0;
+        transform: scale(0.92) translateY(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@keyframes radarPulseDot {
+    0% {
+        transform: scale(0.6);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(2.2);
+        opacity: 0;
+    }
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
     }
 }

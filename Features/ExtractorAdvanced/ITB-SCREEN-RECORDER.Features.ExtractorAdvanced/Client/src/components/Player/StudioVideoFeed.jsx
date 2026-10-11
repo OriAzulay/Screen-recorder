@@ -1,7 +1,7 @@
 // ==========================================
 // File: Features/ExtractorAdvanced/Client/src/components/Player/StudioVideoFeed.jsx
 // ==========================================
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import NoSignalHero from '../Viewport/overlays/NoSignalHero.jsx';
 import { frameStore } from '../../utils/frameStore.js';
 import { getAudioSettings } from '../../utils/studioSessionStore.js';
@@ -25,7 +25,10 @@ export default function StudioVideoFeed({
     showWatermark = true,
     className = ''
 }) {
-    const videoRef = useRef(null);
+    // רפרנסים לשני נגני ה-Ping-Pong
+    const videoRefA = useRef(null);
+    const videoRefB = useRef(null);
+
     const playheadMsRef = useRef(playheadMs);
     const streamStartOffsetMsRef = useRef(playheadMs);
     const prevIsPlayingRef = useRef(isPlaying);
@@ -33,21 +36,38 @@ export default function StudioVideoFeed({
 
     playheadMsRef.current = playheadMs;
 
-    // 💡 שימוש במזהים פרימיטיביים למניעת רינדורי-סרק ושבירת רפרנסים
     const stationId = station?.id;
     const hostname = (station && (station.hostname || station.name)) || '';
-    const stationSegments = (station && (recordingSegments[station.id] || station.segments)) || [];
+
+    // 💡 תיקון קריטי 1: בדיקת מקטעים לפי station.id וגם לפי hostname
+    const stationSegments = useMemo(() => {
+        if (!station) return [];
+        return recordingSegments[station.id] ||
+            recordingSegments[station.hostname] ||
+            station.segments ||
+            [];
+    }, [station, recordingSegments]);
 
     const currentEpoch = baseEpochMs + playheadMs;
-    const isInRecordingSegment = stationSegments.some(seg => {
-        const s = seg.startEpochMs ?? seg.startEpoch ?? 0;
-        const e = seg.endEpochMs ?? seg.endEpoch ?? 0;
-        return currentEpoch >= s && currentEpoch <= e;
-    });
 
-    const isNoSignalGap = !isInRecordingSegment;
+    // 💡 תיקון קריטי 2: חלון סבילות של 2 שניות למניעת NO SIGNAL במיקרו-פערים בין צ'אנקים
+    const isInRecordingSegment = useMemo(() => {
+        if (stationSegments.length === 0) return true; // Fail-open: אם טרם נטענו סגמנטים, מנסים להזרים ולא נועלים ישר
+        return stationSegments.some(seg => {
+            const s = (seg.startEpochMs ?? seg.startEpoch ?? 0) - 2000;
+            const e = (seg.endEpochMs ?? seg.endEpoch ?? 0) + 2000;
+            return currentEpoch >= s && currentEpoch <= e;
+        });
+    }, [stationSegments, currentEpoch]);
 
-    const [streamSrc, setStreamSrc] = useState('');
+    const isNoSignalGap = !isInRecordingSegment && stationSegments.length > 0;
+
+    // ניהול מצב ה-Ping-Pong
+    const [activeSlot, setActiveSlot] = useState('A'); // 'A' | 'B'
+    const [srcA, setSrcA] = useState('');
+    const [srcB, setSrcB] = useState('');
+    const [preloadedSegment, setPreloadedSegment] = useState(null);
+
     const [isVideoRendering, setIsVideoRendering] = useState(false);
     const [isBufferingStall, setIsBufferingStall] = useState(false);
 
@@ -57,18 +77,26 @@ export default function StudioVideoFeed({
         return frameStore.get(hostname, targetEpochMs) || null;
     });
 
+    const activeVideoRef = activeSlot === 'A' ? videoRefA : videoRefB;
+    const backgroundVideoRef = activeSlot === 'A' ? videoRefB : videoRefA;
+
     const applyAudioSettings = useCallback(() => {
-        if (!videoRef.current) return;
         const audio = getAudioSettings();
-        videoRef.current.volume = audio.volume;
-        videoRef.current.muted = audio.isMuted;
-    }, []);
+        if (videoRefA.current) {
+            videoRefA.current.volume = audio.volume;
+            videoRefA.current.muted = activeSlot !== 'A' || audio.isMuted;
+        }
+        if (videoRefB.current) {
+            videoRefB.current.volume = audio.volume;
+            videoRefB.current.muted = activeSlot !== 'B' || audio.isMuted;
+        }
+    }, [activeSlot]);
 
     useEffect(() => {
         const handleAudioChange = (e) => {
-            if (videoRef.current && e.detail) {
-                videoRef.current.volume = e.detail.volume;
-                videoRef.current.muted = e.detail.isMuted;
+            if (e.detail) {
+                if (videoRefA.current) videoRefA.current.volume = e.detail.volume;
+                if (videoRefB.current) videoRefB.current.volume = e.detail.volume;
             }
         };
         window.addEventListener('itb-audio-state-changed', handleAudioChange);
@@ -76,12 +104,11 @@ export default function StudioVideoFeed({
     }, []);
 
     useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.playbackRate = playbackSpeed;
-        }
+        if (videoRefA.current) videoRefA.current.playbackRate = playbackSpeed;
+        if (videoRefB.current) videoRefB.current.playbackRate = playbackSpeed;
     }, [playbackSpeed]);
 
-    // 💡 שליפת פריים: תלוי ב-stationId ו-hostname ולא באובייקט station כולו
+    // שליפת פריים במצב Pause
     useEffect(() => {
         if (!stationId || !hostname) return;
 
@@ -103,13 +130,11 @@ export default function StudioVideoFeed({
             return;
         }
 
-        const delayMs = wasPlaying ? 50 : 350;
+        const delayMs = wasPlaying ? 40 : 200;
         const fetchTimer = setTimeout(() => {
             if (!isMounted) return;
             frameStore.fetchFrame(hostname, targetEpochMs, abortController.signal).then(res => {
-                if (isMounted && res) {
-                    setFrameResult(res);
-                }
+                if (isMounted && res) setFrameResult(res);
             });
         }, delayMs);
 
@@ -127,7 +152,15 @@ export default function StudioVideoFeed({
         };
     }, [stationId, hostname, baseEpochMs, playheadMs, isPlaying]);
 
-    // 💡 הפעלת הווידאו: נמנעת מפירוק הווידאו כשתחנות אחרות מתעדכנות
+    // בניית URL מבוסס Epoch
+    const buildStreamUrl = useCallback((seekMs) => {
+        const startEpochVal = Math.round(baseEpochMs);
+        const endEpochVal = Math.round(baseEpochMs + totalDurationMs);
+        const seekEpochVal = Math.min(endEpochVal, Math.max(startEpochVal, Math.round(baseEpochMs + seekMs)));
+        return `/api/v1/extractor-advanced/stream?hostname=${encodeURIComponent(hostname)}&startEpoch=${startEpochVal}&endEpoch=${endEpochVal}&seekEpoch=${seekEpochVal}&speed=${playbackSpeed}&_t=${Date.now()}`;
+    }, [baseEpochMs, totalDurationMs, hostname, playbackSpeed]);
+
+    // 💡 אתחול הזרמה בעת לחיצה על Play
     useEffect(() => {
         if (!stationId || !hostname) return;
 
@@ -135,36 +168,67 @@ export default function StudioVideoFeed({
             const currentHead = playheadMsRef.current;
             streamStartOffsetMsRef.current = currentHead;
 
-            const startEpochVal = Math.round(baseEpochMs);
-            const endEpochVal = Math.round(baseEpochMs + totalDurationMs);
-            const seekEpochVal = Math.min(endEpochVal, Math.max(startEpochVal, Math.round(baseEpochMs + currentHead)));
-
-            const url = `/api/v1/extractor-advanced/stream?hostname=${encodeURIComponent(hostname)}&startEpoch=${startEpochVal}&endEpoch=${endEpochVal}&seekEpoch=${seekEpochVal}&speed=1&_t=${Date.now()}`;
+            const url = buildStreamUrl(currentHead);
 
             setIsVideoRendering(false);
-            setIsBufferingStall(false);
-            setStreamSrc(url);
+            setIsBufferingStall(true);
+            setActiveSlot('A');
+            setSrcA(url);
+            setSrcB('');
+            setPreloadedSegment(null);
         } else if (!isPlaying) {
-            setStreamSrc('');
+            setSrcA('');
+            setSrcB('');
+            setPreloadedSegment(null);
             setIsVideoRendering(false);
             setIsBufferingStall(false);
-            if (videoRef.current) {
-                videoRef.current.pause();
+            if (videoRefA.current) videoRefA.current.pause();
+            if (videoRefB.current) videoRefB.current.pause();
+        }
+    }, [isPlaying, stationId, hostname, isInRecordingSegment, buildStreamUrl]);
+
+    // 💡 מנוע Preload חכם: טוען את המקטע הבא לנגן הרקע בזמן שהנגן הראשי מנגן
+    useEffect(() => {
+        if (!isPlaying || !isVideoRendering || stationSegments.length === 0) return;
+
+        const curEpoch = baseEpochMs + playheadMsRef.current;
+
+        // איתור המקטע הבא בציר הזמן
+        const nextSeg = stationSegments
+            .map(seg => ({
+                start: seg.startEpochMs ?? seg.startEpoch ?? 0,
+                end: seg.endEpochMs ?? seg.endEpoch ?? 0
+            }))
+            .filter(s => s.start > curEpoch + 500)
+            .sort((a, b) => a.start - b.start)[0];
+
+        if (nextSeg && (!preloadedSegment || preloadedSegment.start !== nextSeg.start)) {
+            const nextStartMs = nextSeg.start - baseEpochMs;
+            if (nextStartMs < outPointMs) {
+                const nextUrl = buildStreamUrl(nextStartMs);
+                setPreloadedSegment({ start: nextSeg.start, ms: nextStartMs });
+
+                // טעינה לתוך הסלוט הפנוי ברקע
+                if (activeSlot === 'A') {
+                    setSrcB(nextUrl);
+                } else {
+                    setSrcA(nextUrl);
+                }
             }
         }
-    }, [isPlaying, stationId, hostname, baseEpochMs, totalDurationMs, isInRecordingSegment]);
+    }, [isPlaying, isVideoRendering, stationSegments, baseEpochMs, outPointMs, activeSlot, preloadedSegment, buildStreamUrl]);
 
-    // 💡 מנוע סנכרון חלק ב-60fps עם פילטר מונוטוני למניעת קפיצות אחורה
+    // 💡 מנוע סנכרון חלק ב-60fps
     useEffect(() => {
-        if (!isPlaying || !streamSrc || !isVideoRendering) return;
+        if (!isPlaying || !isVideoRendering) return;
 
         let rafId = null;
-        let syncVideoSec = videoRef.current ? videoRef.current.currentTime : 0;
+        let syncVideoSec = activeVideoRef.current ? activeVideoRef.current.currentTime : 0;
         let syncWallTime = performance.now();
         let lastEmittedMs = streamStartOffsetMsRef.current + Math.round(syncVideoSec * 1000);
 
         const smoothTick = () => {
-            const video = videoRef.current;
+            const video = activeVideoRef.current;
             if (video && !video.paused && !video.ended && !isBufferingStall && !isSkippingGapRef.current) {
                 const now = performance.now();
                 const currentVideoSec = video.currentTime;
@@ -180,13 +244,12 @@ export default function StudioVideoFeed({
 
                 let calculatedMs = streamStartOffsetMsRef.current + Math.round(estimatedVideoSec * 1000);
 
-                // פילטר מונוטוני: מניעת תנודות אחורה מתיקוני A/V sync (עד 300ms)
                 const delta = calculatedMs - lastEmittedMs;
                 if (delta < 0 && delta > -300) {
                     calculatedMs = lastEmittedMs;
                 }
 
-                // בדיקת סיום טווח החיתוך (Out Point)
+                // בדיקת סיום טווח החיתוך
                 if (calculatedMs >= outPointMs) {
                     if (isLooping) {
                         lastEmittedMs = inPointMs;
@@ -212,13 +275,9 @@ export default function StudioVideoFeed({
                     streamStartOffsetMsRef.current = gapEndMs;
                     lastEmittedMs = gapEndMs;
 
-                    const startEpochVal = Math.round(baseEpochMs);
-                    const endEpochVal = Math.round(baseEpochMs + totalDurationMs);
-                    const seekEpochVal = Math.min(endEpochVal, Math.max(startEpochVal, Math.round(baseEpochMs + gapEndMs)));
-                    const url = `/api/v1/extractor-advanced/stream?hostname=${encodeURIComponent(hostname)}&startEpoch=${startEpochVal}&endEpoch=${endEpochVal}&seekEpoch=${seekEpochVal}&speed=1&_t=${Date.now()}`;
-
-                    setIsVideoRendering(false);
-                    setStreamSrc(url);
+                    const url = buildStreamUrl(gapEndMs);
+                    if (activeSlot === 'A') setSrcA(url);
+                    else setSrcB(url);
 
                     setTimeout(() => { isSkippingGapRef.current = false; }, 300);
                     return;
@@ -239,7 +298,6 @@ export default function StudioVideoFeed({
         };
     }, [
         isPlaying,
-        streamSrc,
         isVideoRendering,
         isBufferingStall,
         playbackSpeed,
@@ -247,43 +305,40 @@ export default function StudioVideoFeed({
         inPointMs,
         isLooping,
         baseEpochMs,
-        totalDurationMs,
-        hostname,
+        activeSlot,
+        activeVideoRef,
         globalGaps,
+        buildStreamUrl,
         setPlayheadMs,
         setIsPlaying
     ]);
 
-    const handleVideoEnded = () => {
+    // 💡 החלפה חלקה באפס מילי-שניות (Seamless Hand-off) בסיום המקטע
+    const handleActiveVideoEnded = () => {
         if (isSkippingGapRef.current) return;
-        const curEpoch = baseEpochMs + playheadMsRef.current;
 
-        const nextSeg = stationSegments
-            .map(seg => ({ start: seg.startEpochMs ?? seg.startEpoch ?? 0, end: seg.endEpochMs ?? seg.endEpoch ?? 0 }))
-            .filter(s => s.start > curEpoch + 200)
-            .sort((a, b) => a.start - b.start)[0];
-
-        if (nextSeg && (nextSeg.start - baseEpochMs) < outPointMs) {
-            isSkippingGapRef.current = true;
-            const nextMs = nextSeg.start - baseEpochMs;
-            setPlayheadMs?.(nextMs);
+        // אם המקטע הבא כבר טעון בנגן הרקע - מעבירים אליו את הניגון מיד ללא שום Buffering!
+        if (preloadedSegment && backgroundVideoRef.current) {
+            const nextMs = preloadedSegment.ms;
             streamStartOffsetMsRef.current = nextMs;
+            setPlayheadMs?.(nextMs);
 
-            const startEpochVal = Math.round(baseEpochMs);
-            const endEpochVal = Math.round(baseEpochMs + totalDurationMs);
-            const seekEpochVal = Math.min(endEpochVal, Math.max(startEpochVal, Math.round(baseEpochMs + nextMs)));
-            const url = `/api/v1/extractor-advanced/stream?hostname=${encodeURIComponent(hostname)}&startEpoch=${startEpochVal}&endEpoch=${endEpochVal}&seekEpoch=${seekEpochVal}&speed=1&_t=${Date.now()}`;
+            const nextSlot = activeSlot === 'A' ? 'B' : 'A';
+            setActiveSlot(nextSlot);
+            applyAudioSettings();
 
-            setIsVideoRendering(false);
-            setStreamSrc(url);
-
-            setTimeout(() => { isSkippingGapRef.current = false; }, 300);
+            backgroundVideoRef.current.play().catch(e => console.warn('[Video] Preload play:', e));
+            setPreloadedSegment(null);
             return;
         }
 
+        // במקרה של לולאה מלאה
         if (isLooping) {
             setPlayheadMs?.(inPointMs);
-            setIsPlaying?.(true);
+            streamStartOffsetMsRef.current = inPointMs;
+            const url = buildStreamUrl(inPointMs);
+            if (activeSlot === 'A') setSrcA(url);
+            else setSrcB(url);
         } else {
             setIsPlaying?.(false);
             setPlayheadMs?.(outPointMs);
@@ -296,49 +351,103 @@ export default function StudioVideoFeed({
 
     return (
         <div className={`studio-video-feed-root ${className}`.trim()}>
-            {streamSrc && (
+            {/* 💡 נגן A */}
+            {srcA && (
                 <video
-                    ref={videoRef}
-                    src={streamSrc}
+                    ref={videoRefA}
+                    src={srcA}
                     className="feed-video-element"
                     style={{
-                        opacity: isVideoRendering ? 1 : 0,
-                        zIndex: isVideoRendering ? 3 : 1
+                        opacity: isVideoRendering && activeSlot === 'A' ? 1 : 0,
+                        zIndex: activeSlot === 'A' ? 3 : 1,
+                        pointerEvents: activeSlot === 'A' ? 'auto' : 'none'
                     }}
                     playsInline
-                    autoPlay
-                    muted={getAudioSettings().isMuted}
-                    onLoadedData={() => {
-                        if (videoRef.current) {
-                            videoRef.current.playbackRate = playbackSpeed;
-                        }
-                    }}
+                    autoPlay={activeSlot === 'A'}
+                    preload="auto"
+                    muted={activeSlot !== 'A' || getAudioSettings().isMuted}
                     onCanPlay={() => {
                         applyAudioSettings();
-                        if (videoRef.current) {
-                            videoRef.current.playbackRate = playbackSpeed;
-                        }
-                        if (isPlaying && videoRef.current) {
-                            videoRef.current.play().catch(err => console.warn('[Video] Play interrupted:', err));
+                        if (isPlaying && activeSlot === 'A' && videoRefA.current) {
+                            videoRefA.current.play().catch(() => { });
                         }
                     }}
                     onPlaying={() => {
-                        setIsVideoRendering(true);
-                        setIsBufferingStall(false);
-                    }}
-                    onWaiting={() => {
-                        setIsBufferingStall(true);
-                    }}
-                    onTimeUpdate={() => {
-                        if (!isVideoRendering && videoRef.current?.currentTime > 0) {
+                        if (activeSlot === 'A') {
                             setIsVideoRendering(true);
                             setIsBufferingStall(false);
                         }
                     }}
-                    onEnded={handleVideoEnded}
+                    onWaiting={() => {
+                        if (activeSlot === 'A') setIsBufferingStall(true);
+                    }}
+                    onTimeUpdate={() => {
+                        if (activeSlot === 'A' && !isVideoRendering && videoRefA.current?.currentTime > 0) {
+                            setIsVideoRendering(true);
+                            setIsBufferingStall(false);
+                        }
+                    }}
+                    onError={() => {
+                        if (activeSlot === 'A') {
+                            setIsBufferingStall(false);
+                            setIsVideoRendering(false);
+                        }
+                    }}
+                    onEnded={() => {
+                        if (activeSlot === 'A') handleActiveVideoEnded();
+                    }}
                 />
             )}
 
+            {/* 💡 נגן B (מופעל במקביל לצורך Preloading) */}
+            {srcB && (
+                <video
+                    ref={videoRefB}
+                    src={srcB}
+                    className="feed-video-element"
+                    style={{
+                        opacity: isVideoRendering && activeSlot === 'B' ? 1 : 0,
+                        zIndex: activeSlot === 'B' ? 3 : 1,
+                        pointerEvents: activeSlot === 'B' ? 'auto' : 'none'
+                    }}
+                    playsInline
+                    autoPlay={activeSlot === 'B'}
+                    preload="auto"
+                    muted={activeSlot !== 'B' || getAudioSettings().isMuted}
+                    onCanPlay={() => {
+                        applyAudioSettings();
+                        if (isPlaying && activeSlot === 'B' && videoRefB.current) {
+                            videoRefB.current.play().catch(() => { });
+                        }
+                    }}
+                    onPlaying={() => {
+                        if (activeSlot === 'B') {
+                            setIsVideoRendering(true);
+                            setIsBufferingStall(false);
+                        }
+                    }}
+                    onWaiting={() => {
+                        if (activeSlot === 'B') setIsBufferingStall(true);
+                    }}
+                    onTimeUpdate={() => {
+                        if (activeSlot === 'B' && !isVideoRendering && videoRefB.current?.currentTime > 0) {
+                            setIsVideoRendering(true);
+                            setIsBufferingStall(false);
+                        }
+                    }}
+                    onError={() => {
+                        if (activeSlot === 'B') {
+                            setIsBufferingStall(false);
+                            setIsVideoRendering(false);
+                        }
+                    }}
+                    onEnded={() => {
+                        if (activeSlot === 'B') handleActiveVideoEnded();
+                    }}
+                />
+            )}
+
+            {/* שכבת תמונה סטטית / No Signal Hero */}
             <div
                 className="feed-static-layer"
                 style={{ zIndex: isVideoRendering ? 0 : 2 }}
@@ -358,6 +467,7 @@ export default function StudioVideoFeed({
                 ) : null}
             </div>
 
+            {/* חיווי טעינה / Buffering */}
             {showBufferingOverlay && (
                 <div className="feed-buffering-overlay">
                     <div className="buffering-glass-card">

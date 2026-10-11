@@ -1,4 +1,6 @@
-﻿// Client/src/components/Dashboard/DashboardGrid.scss
+﻿// ==========================================
+// File: ClientApp/src/components/Dashboard/DashboardGrid.scss
+// ==========================================
 
 html, body, #root {
     background-color: var(--bg-app, #070A10) !important;
@@ -34,6 +36,35 @@ html, body, #root {
 
     &.is-feature-mode {
         padding-bottom: 12px;
+    }
+    /* 💡 מצב ניתוק מהשרת: הקפאת אינטראקציות ועמעום כרטיסיות */
+    &.is-server-offline {
+        .station-tactical-card,
+        .stations-dense-table {
+            filter: grayscale(25%) contrast(95%);
+            opacity: 0.85;
+            transition: all 0.3s ease;
+            pointer-events: none; // מונע שליחת פקודות כוזבות כשהשרת אינו זמין
+        }
+
+        .active-radar-listener-stage {
+            .sonar-emitter-cluster {
+                .sonar-ring {
+                    border-color: var(--accent-rose, #EF4444);
+                }
+
+                .sonar-center-beacon {
+                    background: rgba(239, 68, 68, 0.15);
+                    border-color: var(--accent-rose, #EF4444);
+                    box-shadow: 0 0 14px rgba(239, 68, 68, 0.35);
+
+                    .beacon-core {
+                        background: var(--c2-red-light, #F87171);
+                        box-shadow: 0 0 8px #F87171;
+                    }
+                }
+            }
+        }
     }
 
     .dashboard-content-container {
@@ -366,7 +397,7 @@ html, body, #root {
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 32px; /* רווח נשימה בטוח מהכותרת */
+            margin-bottom: 32px;
 
             .sonar-ring {
                 position: absolute;
@@ -575,8 +606,7 @@ html, body, #root {
 }
 
 /* ======================================================================
-   הגדרת אנימציית הסונאר המעודנת:
-   מתרחבת קלות (עד scale 1.35) ונמוגה הרבה לפני שנוגעת בטקסט
+   הגדרת אנימציית הסונאר המעודנת
    ====================================================================== */
 @keyframes sonarSweep {
     0% {

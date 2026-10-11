@@ -252,10 +252,11 @@ namespace ITB_SCREEN_RECORDER.Server
                 builder.Services.AddSingleton<IKeystrokeRepository>(sp => sp.GetRequiredService<ICatalogRepository>());
                 builder.Services.AddSingleton<IKeystrokeSrtGenerator, KeystrokeSrtGenerator>();
                 builder.Services.AddSingleton<IVideoProbeService, VideoProbeService>();
-                builder.Services.AddSingleton<IStorageScannerService, StorageScannerService>();
+
                 builder.Services.AddSingleton<ISystemConfigDbSyncService, SystemConfigDbSyncService>();
                 builder.Services.AddHostedService(sp => (SystemConfigDbSyncService)sp.GetRequiredService<ISystemConfigDbSyncService>());
 
+                // 💡 שירות תחזוקת הקטלוג והאינדוקס
                 builder.Services.AddSingleton<CatalogMaintenanceService>();
                 builder.Services.AddSingleton<ICatalogMaintenanceService>(sp => sp.GetRequiredService<CatalogMaintenanceService>());
                 builder.Services.AddHostedService(sp => sp.GetRequiredService<CatalogMaintenanceService>());

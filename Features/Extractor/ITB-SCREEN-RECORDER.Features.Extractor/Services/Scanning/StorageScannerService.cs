@@ -33,7 +33,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 
         private static readonly string[] SupportedVideoExtensions = { ".mp4", ".fmp4", ".flv", ".mkv", ".ts", ".mov" };
 
-        // 💡 תמיכה כפולה: תבנית תאריך קלאסית + תבנית Epoch מודרנית
         private static readonly Regex UniversalChunkRegex = new(
             @"(?:^(?<host>[a-zA-Z0-9_\-\.]+?)[_-])?(?<year>20\d{2})[-_]?(?<month>\d{2})[-_]?(?<day>\d{2})[-_T](?<hour>\d{2})[-_:]?(?<minute>\d{2})[-_:]?(?<sec>\d{2})(?:[_\-\.]\d+)?(?<utc>Z)?\.(mp4|fmp4|flv|mkv|ts|mov)$",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -116,17 +115,55 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
             long startMs = new DateTimeOffset(startUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
             long endMs = new DateTimeOffset(endUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
 
-            using var conn = OpenCatalogDbConnection();
-            const string sql = @"
-                SELECT DISTINCT station_id 
-                FROM recording_chunks 
-                WHERE end_epoch_ms >= @startMs AND start_epoch_ms <= @endMs
-                UNION
-                SELECT station_id FROM station_nodes
-                ORDER BY 1 ASC;";
+            var hostsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            var hosts = (await conn.QueryAsync<string>(sql, new { startMs, endMs })).ToList();
-            return hosts.Where(h => !string.IsNullOrWhiteSpace(h)).ToList();
+            // 1. שליפה מ-SQLite
+            try
+            {
+                using var conn = OpenCatalogDbConnection();
+                const string sql = @"
+                    SELECT DISTINCT station_id 
+                    FROM recording_chunks 
+                    WHERE end_epoch_ms >= @startMs AND start_epoch_ms <= @endMs
+                    UNION
+                    SELECT station_id FROM station_nodes;";
+
+                var dbHosts = await conn.QueryAsync<string>(sql, new { startMs, endMs });
+                foreach (var h in dbHosts.Where(s => !string.IsNullOrWhiteSpace(s)))
+                {
+                    hostsSet.Add(h);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[STORAGE SCANNER] Failed querying available hosts from DB.");
+            }
+
+            // 2. סריקת תיקיות פיזיות בדיסק (עבור תחנות שהועתקו ידנית או באופליין)
+            foreach (var root in ResolveActiveStorageRoots().Where(Directory.Exists))
+            {
+                try
+                {
+                    foreach (var dir in Directory.EnumerateDirectories(root))
+                    {
+                        string dirName = Path.GetFileName(dir);
+                        if (string.Equals(dirName, "live", StringComparison.OrdinalIgnoreCase))
+                        {
+                            foreach (var sub in Directory.EnumerateDirectories(dir))
+                            {
+                                hostsSet.Add(Path.GetFileName(sub));
+                            }
+                        }
+                        else if (!dirName.StartsWith(".") && !dirName.Equals("temp", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hostsSet.Add(dirName);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return hostsSet.OrderBy(h => h).ToList();
         }
 
         public async Task<List<RecordingChunkMetadata>> GetChunksForStationAsync(string hostname, DateTime startUtc, DateTime endUtc)
@@ -134,28 +171,26 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
             long startMs = new DateTimeOffset(startUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
             long endMs = new DateTimeOffset(endUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
 
-            // 💡 1. קריאה מהירה ראשונית מ-SQLite בלבד (0 נגיעות בדיסק)
-            var chunks = await QueryChunksFromDbAsync(hostname, startMs, endMs);
-            if (chunks.Count > 0)
+            // 1. שליפת כל המקטעים שכבר קיימים ב-DB
+            var dbChunks = await QueryChunksFromDbAsync(hostname, startMs, endMs);
+            var knownPaths = new HashSet<string>(dbChunks.Select(c => c.FullPath), StringComparer.OrdinalIgnoreCase);
+
+            // 2. סריקת דיסק נקודתית לגילוי קבצים שטרם אונדקסו
+            var missingOnDisk = await ScanUnindexedFilesForStationAsync(hostname, startMs, endMs, knownPaths);
+
+            if (missingOnDisk.Count > 0)
             {
-                return chunks;
-            }
+                _logger.LogInformation("[STORAGE SCANNER] Found {Count} unindexed file(s) on disk for '{Host}'. Auto-indexing immediately...",
+                    missingOnDisk.Count, hostname);
 
-            // 💡 2. Opportunistic Auto-Index: רק אם ה-DB ריק לטווח זה, סורקים נקודתית את תיקיית העמדה בלבד
-            _logger.LogInformation("[STORAGE SCANNER] No chunks in SQLite for '{Host}' between {Start:s} and {End:s}. Inspecting station folder...",
-                hostname, startUtc, endUtc);
+                // שמירה ל-DB
+                await FlushChunksBatchAsync(missingOnDisk);
 
-            var discovered = await ScanAndIndexSingleStationRangeAsync(hostname, startMs, endMs);
-            if (discovered.Count > 0)
-            {
-                // שמירה מיידית ל-SQLite כך שהקריאות הבאות יגיעו ב-100% מהאינדקס
-                await FlushChunksBatchAsync(discovered);
-
-                // שליפה חוזרת ישירות מה-DB המעודכן
+                // שליפה מחדש של הרשימה המעודכנת
                 return await QueryChunksFromDbAsync(hostname, startMs, endMs);
             }
 
-            return new List<RecordingChunkMetadata>();
+            return dbChunks;
         }
 
         private async Task<List<RecordingChunkMetadata>> QueryChunksFromDbAsync(string hostname, long startMs, long endMs)
@@ -197,45 +232,65 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
             return chunks;
         }
 
-        private async Task<List<(string StationId, string Path, long StartMs, long EndMs, long Size)>> ScanAndIndexSingleStationRangeAsync(
-            string hostname, long startMs, long endMs)
+        private async Task<List<(string StationId, string Path, long StartMs, long EndMs, long Size)>> ScanUnindexedFilesForStationAsync(
+            string hostname, long startMs, long endMs, HashSet<string> knownPaths)
         {
-            var results = new List<(string StationId, string Path, long StartMs, long EndMs, long Size)>();
+            var missing = new List<(string StationId, string Path, long StartMs, long EndMs, long Size)>();
             var roots = ResolveActiveStorageRoots().Where(Directory.Exists);
+
+            int intervalMinutes = Math.Max(1, _systemConfigMonitor.CurrentValue?.Storage?.ChunkIntervalMinutes ?? 15);
+            long defaultDurationMs = intervalMinutes * 60 * 1000;
 
             foreach (var root in roots)
             {
-                // בדיקת הנתיבים הנפוצים: root/hostname או root/live/hostname
                 string p1 = Path.Combine(root, hostname);
                 string p2 = Path.Combine(root, "live", hostname);
                 string? targetDir = Directory.Exists(p1) ? p1 : (Directory.Exists(p2) ? p2 : null);
 
                 if (targetDir == null) continue;
 
-                var files = Directory.EnumerateFiles(targetDir, "*.*", SearchOption.TopDirectoryOnly)
-                    .Where(f => SupportedVideoExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
+                var candidateFiles = Directory.EnumerateFiles(targetDir, "*.*", SearchOption.TopDirectoryOnly)
+                    .Where(f => SupportedVideoExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase) && !knownPaths.Contains(f))
                     .OrderBy(f => f)
                     .ToList();
 
-                for (int i = 0; i < files.Count; i++)
+                for (int i = 0; i < candidateFiles.Count; i++)
                 {
-                    string file = files[i];
+                    string file = candidateFiles[i];
                     var parsed = TryParseChunkFast(file, hostname);
                     if (parsed != null)
                     {
-                        long fStart = new DateTimeOffset(parsed.StartUtc).ToUnixTimeMilliseconds();
-                        long fEnd = new DateTimeOffset(parsed.EndUtc).ToUnixTimeMilliseconds();
+                        long fStart = new DateTimeOffset(parsed.StartUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
+                        long fEnd = fStart + defaultDurationMs;
 
+                        // אם קיים קובץ עוקב, זמן הסיום של הנוכחי הוא זמן ההתחלה של העוקב
+                        if (i + 1 < candidateFiles.Count)
+                        {
+                            var nextParsed = TryParseChunkFast(candidateFiles[i + 1], hostname);
+                            if (nextParsed != null)
+                            {
+                                long nextStart = new DateTimeOffset(nextParsed.StartUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
+                                if (nextStart > fStart && (nextStart - fStart) <= (30 * 60 * 1000))
+                                {
+                                    fEnd = nextStart;
+                                }
+                            }
+                        }
+
+                        // בדיקה אם הקובץ נופל בטווח המבוקש
                         if (fEnd >= startMs && fStart <= endMs)
                         {
                             var fi = new FileInfo(file);
-                            results.Add((hostname, file, fStart, fEnd, fi.Length));
+                            if (fi.Exists && fi.Length > 0)
+                            {
+                                missing.Add((hostname, file, fStart, fEnd, fi.Length));
+                            }
                         }
                     }
                 }
             }
 
-            return results;
+            return missing;
         }
 
         public async Task<string> BuildConcatManifestAsync(List<RecordingChunkMetadata> chunks, DateTime rangeStartUtc, DateTime rangeEndUtc)
@@ -323,7 +378,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
             var roots = ResolveActiveStorageRoots().Where(Directory.Exists).ToList();
             if (roots.Count == 0) return new ReindexResult(0, 0, 0, 0);
 
-            // 💡 שליפת כל הקבצים הקיימים בזיכרון - מונע פתיחת קבצים שכבר אותרו
             HashSet<string> existingPaths;
             using (var conn = OpenCatalogDbConnection())
             {
@@ -333,6 +387,8 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 
             int totalScanned = 0, newlyIndexed = 0, skipped = 0, errors = 0;
             var chunksToAdd = new List<(string StationId, string Path, long StartMs, long EndMs, long Size)>();
+            int intervalMinutes = Math.Max(1, _systemConfigMonitor.CurrentValue?.Storage?.ChunkIntervalMinutes ?? 15);
+            long defaultDurationMs = intervalMinutes * 60 * 1000;
 
             foreach (var root in roots)
             {
@@ -352,7 +408,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                     var file = files[i];
                     totalScanned++;
 
-                    // 💡 אם הקובץ כבר מאונדקס - מדלגים מיד ללא קריאת Header וללא I/O
                     if (existingPaths.Contains(file))
                     {
                         skipped++;
@@ -365,21 +420,18 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                         if (parsed != null)
                         {
                             var fi = new FileInfo(file);
-                            long startMs = new DateTimeOffset(parsed.StartUtc).ToUnixTimeMilliseconds();
-                            long endMs = new DateTimeOffset(parsed.EndUtc).ToUnixTimeMilliseconds();
+                            long startMs = new DateTimeOffset(parsed.StartUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
+                            long endMs = startMs + defaultDurationMs;
 
-                            if (endMs <= startMs || (endMs - startMs) == (15 * 60 * 1000))
+                            if (i + 1 < files.Count)
                             {
-                                if (i + 1 < files.Count)
+                                var nextParsed = TryParseChunkFast(files[i + 1], null);
+                                if (nextParsed != null && string.Equals(nextParsed.Hostname, parsed.Hostname, StringComparison.OrdinalIgnoreCase))
                                 {
-                                    var nextParsed = TryParseChunkFast(files[i + 1], null);
-                                    if (nextParsed != null && string.Equals(nextParsed.Hostname, parsed.Hostname, StringComparison.OrdinalIgnoreCase))
+                                    long nextStartMs = new DateTimeOffset(nextParsed.StartUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
+                                    if (nextStartMs > startMs && (nextStartMs - startMs) <= (30 * 60 * 1000))
                                     {
-                                        long nextStartMs = new DateTimeOffset(nextParsed.StartUtc).ToUnixTimeMilliseconds();
-                                        if (nextStartMs > startMs && (nextStartMs - startMs) <= (20 * 60 * 1000))
-                                        {
-                                            endMs = nextStartMs;
-                                        }
+                                        endMs = nextStartMs;
                                     }
                                 }
                             }
@@ -426,7 +478,11 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 ) VALUES (
                     @StationId, @Path, @StartMs, @EndMs, 
                     (@EndMs - @StartMs), @Size, 1920, 1080, 30, 1, 1, @Now
-                ) ON CONFLICT(file_path) DO NOTHING;";
+                ) ON CONFLICT(file_path) DO UPDATE SET
+                    end_epoch_ms = excluded.end_epoch_ms,
+                    duration_ms = (excluded.end_epoch_ms - recording_chunks.start_epoch_ms),
+                    file_size_bytes = excluded.file_size_bytes,
+                    is_finalized = 1;";
 
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             foreach (var item in items)
@@ -480,20 +536,7 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 }
             }
 
-            // 1. עדיפות עליונה: קריאת מטא-דאטה מוטבע מתוך הקובץ (In-Band)
-            var meta = FlvHeaderInspector.ExtractMetadata(filePath);
-            if (meta != null)
-            {
-                return new RecordingChunkMetadata
-                {
-                    FullPath = filePath,
-                    Hostname = host ?? "Station",
-                    StartUtc = meta.StartUtc,
-                    EndUtc = meta.EndUtc
-                };
-            }
-
-            // 2. בדיקת תבנית שמות קבצים ב-Epoch (%s_%f או %s)
+            // 1. תבנית Epoch (%s_%f או %s)
             var matchEpoch = EpochChunkRegex.Match(fileName);
             if (matchEpoch.Success)
             {
@@ -515,7 +558,7 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 };
             }
 
-            // 3. בדיקת תבנית תאריך קלאסית (YYYY-MM-DD...)
+            // 2. תבנית תאריך קלאסית (YYYY-MM-DD...)
             var match = UniversalChunkRegex.Match(fileName);
             if (match.Success)
             {

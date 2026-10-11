@@ -5,7 +5,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ITB_SCREEN_RECORDER.AgentService;
-using ITB_SCREEN_RECORDER.AgentService.Infrastructure;
 using ITB_SCREEN_RECORDER.Core.Configuration;
 using ITB_SCREEN_RECORDER.Core.Common;
 
