@@ -4,21 +4,15 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 using ITB_SCREEN_RECORDER.Features.Extractor.Models;
 using ITB_SCREEN_RECORDER.Features.Extractor.Services;
 
 namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
 {
-    public class StreamMetadataDto
-    {
-        public double Fps { get; set; } = 30.0;
-        public double FrameDurationMs { get; set; } = 33.333;
-        public int Width { get; set; } = 1920;
-        public int Height { get; set; } = 1080;
-    }
-
     public class AdvanceJobInfo : ExportJobInfo
     {
         public List<string> StationIds { get; set; } = new();
@@ -26,16 +20,25 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Models
         public long OutEpochMs { get; set; }
         public string CutMode { get; set; } = "SynchronizedMultiTrack";
 
-        // 💡 הוספת שדות טלמטריה מתקדמים לניהול ETA ומהירות
         public double EstimatedSecondsRemaining { get; set; }
         public double SpeedMBps { get; set; }
+
+        public KeystrokeExportMode KeystrokeMode { get; set; } = KeystrokeExportMode.Caption;
     }
 
     public class AdvanceCutRequestDto
     {
+        [JsonPropertyName("stationIds")]
         public List<string> StationIds { get; set; } = new();
+
+        [JsonPropertyName("inEpochMs")]
         public long InEpochMs { get; set; }
+
+        [JsonPropertyName("outEpochMs")]
         public long OutEpochMs { get; set; }
+
+        [JsonPropertyName("keystrokeMode")]
+        public KeystrokeExportMode KeystrokeMode { get; set; } = KeystrokeExportMode.Caption;
     }
 
     public class SessionManifest

@@ -11,8 +11,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using ITB_SCREEN_RECORDER.Core.Contracts.Network;
 using ITB_SCREEN_RECORDER.Core.Configuration;
+using ITB_SCREEN_RECORDER.Core.Common;
 
-namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
+namespace ITB_SCREEN_RECORDER.AgentService
 {
     public class OfflineBufferDrainingService : BackgroundService
     {
@@ -32,25 +33,42 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
             };
 
             _bufferPath = string.IsNullOrWhiteSpace(config.LocalBufferPath)
-                ? @"C:\ProgramData\ITB-SCREEN-RECORDER\Buffer"
+                ? (OperatingSystem.IsWindows() ? @"C:\ProgramData\ITB-SCREEN-RECORDER\Buffer" : "/var/lib/itb-screen-recorder/buffer")
                 : config.LocalBufferPath;
 
-            string serverBase = !string.IsNullOrWhiteSpace(config.DashboardApiUrl)
-                ? config.DashboardApiUrl.TrimEnd('/')
-                : (Environment.GetEnvironmentVariable("ITB_SERVER_IP") ?? "http://127.0.0.1:5090");
+            // 💡 חילוץ מדויק של שרת הבסיס מתוך AppConfig בלבד (ללא תלות ב-Environment Variables)
+            _uploadUrl = ResolveUploadEndpoint(config.DashboardApiUrl);
 
-            if (!serverBase.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-                !serverBase.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            Logger.AlwaysInfo($"[DRAINER] Initialized. Buffer Path: '{_bufferPath}', Target Upload Endpoint: '{_uploadUrl}'");
+        }
+
+        private static string ResolveUploadEndpoint(string? dashboardApiUrl)
+        {
+            string fallback = "http://127.0.0.1:5090/api/v1/agent/upload-buffer";
+            if (string.IsNullOrWhiteSpace(dashboardApiUrl))
             {
-                serverBase = $"http://{serverBase}";
+                return fallback;
             }
 
-            _uploadUrl = $"{serverBase}/api/v1/agent/upload-buffer";
+            string url = dashboardApiUrl.Trim();
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                url = $"http://{url}";
+            }
+
+            if (Uri.TryCreate(url, UriKind.Absolute, out Uri? parsedUri))
+            {
+                string baseAuthority = parsedUri.GetLeftPart(UriPartial.Authority);
+                return $"{baseAuthority.TrimEnd('/')}/api/v1/agent/upload-buffer";
+            }
+
+            return fallback;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("OfflineBufferDrainingService started. Buffer path: {Path}, Target Endpoint: {Url}", _bufferPath, _uploadUrl);
+            _logger.LogInformation("OfflineBufferDrainingService started. Loop active.");
 
             while (!stoppingToken.IsCancellationRequested)
             {
@@ -67,7 +85,8 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError("Buffer Drainer Error: {Msg}", ex.Message);
+                    Logger.Error($"[DRAINER] Loop Error: {ex.Message}");
+                    _logger.LogError(ex, "Buffer Drainer Error: {Msg}", ex.Message);
                 }
 
                 await Task.Delay(5000, stoppingToken);
@@ -78,7 +97,6 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
         {
             if (!Directory.Exists(_bufferPath)) return;
 
-            // 💡 בדיקת גיל הקובץ ב-UTC (עברו 15 שניות לפחות מסיום הכתיבה) ומיונים לפי זמן יצירה UTC
             var nowUtc = DateTime.UtcNow;
             var files = new DirectoryInfo(_bufferPath).GetFiles()
                 .Where(f => (f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
@@ -91,7 +109,7 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
             {
                 if (ct.IsCancellationRequested || CurrentCommand != BufferCommand.UPLOAD_GRANTED) break;
 
-                _logger.LogInformation("[DRAINER] Starting upload for {FileName} ({Size}MB)", file.Name, file.Length / 1024 / 1024);
+                Logger.AlwaysInfo($"[DRAINER] Starting upload for {file.Name} ({file.Length / 1024 / 1024}MB)...");
                 bool success = await UploadFileAsync(file.FullName, ct);
 
                 if (success)
@@ -99,18 +117,35 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
                     try
                     {
                         file.Delete();
-                        _logger.LogInformation("[DRAINER] Upload Verified (200 OK). File {FileName} deleted locally.", file.Name);
+
+                        string sidecarPath = Path.ChangeExtension(file.FullName, ".keys.jsonl");
+                        if (File.Exists(sidecarPath))
+                        {
+                            try
+                            {
+                                File.Delete(sidecarPath);
+                                Logger.AlwaysInfo($"[DRAINER] Sidecar {Path.GetFileName(sidecarPath)} deleted locally.");
+                            }
+                            catch { }
+                        }
+
+                        Logger.AlwaysInfo($"[DRAINER] Upload Verified (200 OK). Video {file.Name} deleted locally.");
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning("[DRAINER] Uploaded but failed to delete locally: {Msg}", ex.Message);
+                        Logger.Warn($"[DRAINER] Uploaded successfully but failed local deletion: {ex.Message}");
                     }
+                }
+                else
+                {
+                    Logger.Warn($"[DRAINER] Upload failed for {file.Name}. Will retry on next tick.");
                 }
             }
         }
 
         private async Task<bool> UploadFileAsync(string filePath, CancellationToken ct)
         {
+            FileStream? sidecarStream = null;
             try
             {
                 using var content = new MultipartFormDataContent();
@@ -120,13 +155,31 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
                 content.Add(streamContent, "file", Path.GetFileName(filePath));
                 content.Add(new StringContent(Environment.MachineName), "hostname");
 
+                // 💡 בדיקה מפורשת של ה-Sidecar והדפסת לוג ברור
+                string sidecarPath = Path.ChangeExtension(filePath, ".keys.jsonl");
+                if (File.Exists(sidecarPath))
+                {
+                    sidecarStream = new FileStream(sidecarPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    var sidecarContent = new StreamContent(sidecarStream);
+                    content.Add(sidecarContent, "keysFile", Path.GetFileName(sidecarPath));
+                    Logger.AlwaysInfo($"[DRAINER] Sidecar detected: {Path.GetFileName(sidecarPath)} ({sidecarStream.Length} bytes). Attaching to payload.");
+                }
+                else
+                {
+                    Logger.AlwaysInfo($"[DRAINER] No sidecar file found for {Path.GetFileName(filePath)} (no keystrokes recorded).");
+                }
+
                 var response = await _httpClient.PostAsync(_uploadUrl, content, ct);
                 return response.IsSuccessStatusCode;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("[DRAINER] Upload exception: {Msg}", ex.Message);
+                Logger.Warn($"[DRAINER] Upload exception for {Path.GetFileName(filePath)}: {ex.Message}");
                 return false;
+            }
+            finally
+            {
+                sidecarStream?.Dispose();
             }
         }
 
@@ -135,14 +188,15 @@ namespace ITB_SCREEN_RECORDER.AgentService.Infrastructure
             if (!Directory.Exists(_bufferPath)) return;
             var files = new DirectoryInfo(_bufferPath).GetFiles()
                 .Where(f => f.Extension.Equals(".mp4", StringComparison.OrdinalIgnoreCase) ||
-                            f.Extension.Equals(".flv", StringComparison.OrdinalIgnoreCase));
+                            f.Extension.Equals(".flv", StringComparison.OrdinalIgnoreCase) ||
+                            f.Extension.Equals(".jsonl", StringComparison.OrdinalIgnoreCase));
 
             foreach (var file in files)
             {
                 try
                 {
                     file.Delete();
-                    _logger.LogInformation("Discarded local buffer file: {FileName}", file.Name);
+                    Logger.AlwaysInfo($"[DRAINER] Discarded local buffer file: {file.Name}");
                 }
                 catch { }
             }

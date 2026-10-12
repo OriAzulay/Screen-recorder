@@ -1,0 +1,87 @@
+// ==========================================
+// File: Features/ExtractorAdvanced/Client/src/components/Player/KeystrokePlaybackOverlay.scss
+// ==========================================
+
+.keystroke-overlay-root {
+    position: absolute;
+    pointer-events: none;
+    z-index: 45;
+    user-select: none;
+    transition: opacity 0.08s linear;
+    // 🎯 מצב BURN-IN: במרכז המסך עם Keycaps ציאן תלת-ממדיים
+    &.mode-burnin {
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+
+        .keycap-cluster {
+            display: inline-flex;
+            align-items: center;
+            gap: 14px;
+            padding: 10px;
+
+            .keycap-badge {
+                position: relative;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 64px;
+                height: 62px;
+                padding: 0 24px;
+                box-sizing: border-box;
+                // גוף המקש הפיזי
+                background: linear-gradient(180deg, #1c2434 0%, #0c101a 100%);
+                // מסגרת ניאון ציאן טקטית (#00F0FF) בעובי 2.5px
+                border: 2.5px solid #00f0ff;
+                border-radius: 10px;
+                // הילת צל רכה מתחת למקש + זוהר ציאן
+                box-shadow: 0 0 16px rgba(0, 240, 255, 0.45), 0 10px 24px rgba(0, 0, 0, 0.85), inset 0 2px 1px rgba(255, 255, 255, 0.45);
+
+                .keycap-text {
+                    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+                    font-size: 26px;
+                    font-weight: 800;
+                    color: #ffffff;
+                    letter-spacing: 0.5px;
+                    line-height: 1;
+                    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
+                }
+            }
+
+            .keycap-plus {
+                font-family: 'Segoe UI', system-ui, sans-serif;
+                font-size: 24px;
+                font-weight: 800;
+                color: #00f0ff;
+                text-shadow: 0 0 8px rgba(0, 240, 255, 0.8), 0 2px 4px rgba(0, 0, 0, 0.8);
+                margin: 0 2px;
+            }
+        }
+    }
+    // 🎯 מצב CAPTION: כתובית סרטים רכה בתחתית הנגן
+    &.mode-caption {
+        bottom: 35px;
+        left: 50%;
+        transform: translateX(-50%);
+
+        .caption-bar {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 4px 14px;
+            background: rgba(0, 0, 0, 0.82);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.7);
+
+            .caption-text {
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 15px;
+                font-weight: 700;
+                color: #f8fafc;
+                letter-spacing: 0.5px;
+                white-space: nowrap;
+            }
+        }
+    }
+}

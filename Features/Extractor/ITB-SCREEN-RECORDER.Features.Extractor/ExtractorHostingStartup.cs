@@ -31,21 +31,33 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor
                 services.AddSingleton<IFeatureDbInitializer, ExtractorDbInitializer>();
                 services.AddSingleton<IExportJobRepository, ExportJobRepository>();
 
-                // 2. שירות איתור בינאריים תשתיתי (FFmpeg / FFprobe)
+                // 2. איתור בינאריים תשתיתי (FFmpeg / FFprobe)
                 services.AddSingleton<IFfmpegBinaryResolver, FfmpegBinaryResolver>();
 
-                // 3. שירותי ליבה
+                // 3. שירותי סנכרון, מטא-דאטה ורינדור Core
                 services.AddSingleton<IStorageScannerService, StorageScannerService>();
                 services.AddSingleton<IFfmpegConcatRunner, FfmpegConcatRunner>();
-                services.AddSingleton<IExtractorService, ExtractorService>();
-                services.AddSingleton<IFeatureModule, ExtractorModule>();
+                services.AddSingleton<IMediaProbeService, MediaProbeService>();
+                services.AddSingleton<IVideoMetadataService, VideoMetadataService>();
+                services.AddSingleton<INoSignalPatternService, NoSignalPatternService>();
+                services.AddSingleton<ISynchronizationPlanBuilder, SynchronizationPlanBuilder>();
+                services.AddSingleton<ISynchronizedTrackCutter, SynchronizedTrackCutter>();
+
+                // 4. מנוע ה-Extractor הראשי
+                services.AddSingleton<ExtractorService>();
+                services.AddSingleton<IExtractorService>(sp => sp.GetRequiredService<ExtractorService>());
+
+                // 5. ניהול ג'ובים, תחזוקת רקע ומודול
                 services.AddSingleton<IDummyVideoGenerator, DummyVideoGenerator>();
-                services.AddSingleton<IExportJobManager, ExportJobManager>();
+                services.AddSingleton<ExportJobManager>();
+                services.AddSingleton<IExportJobManager>(sp => sp.GetRequiredService<ExportJobManager>());
+                services.AddHostedService<ExtractorGarbageCollectorService>();
+                services.AddSingleton<IFeatureModule, ExtractorModule>();
 
                 services.AddControllers()
                     .AddApplicationPart(typeof(ExtractorHostingStartup).Assembly);
 
-                // 4. אתחול אוטונומי וניתוב UI
+                // 6. אתחול אוטונומי וניתוב UI סטטי
                 services.AddTransient<IStartupFilter, ExtractorStartupFilter>();
             });
         }
@@ -57,7 +69,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor
         {
             return app =>
             {
-                // אתחול אוטונומי של extractor.db בעליית המערכת (Stealth מלא)
                 using (var scope = app.ApplicationServices.CreateScope())
                 {
                     try
@@ -72,7 +83,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor
                     }
                 }
 
-                // הגשת נכסי הווב הסטטיים של הווידג'ט ישירות דרך ההרחבה ב-Core
                 app.UseFeatureStaticAssets(typeof(ExtractorStartupFilter).Assembly, "/extractor");
 
                 next(app);

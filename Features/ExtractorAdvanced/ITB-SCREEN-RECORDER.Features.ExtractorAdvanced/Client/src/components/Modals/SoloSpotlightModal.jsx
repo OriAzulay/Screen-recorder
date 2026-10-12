@@ -7,6 +7,7 @@ import { formatTimelineClock } from '../../utils/timeFormat.js';
 import TimelineBoard from '../Timeline/TimelineBoard.jsx';
 import TransportBar from '../TransportBar/TransportBar.jsx';
 import StudioVideoFeed from '../Player/StudioVideoFeed.jsx';
+import KeystrokePlaybackOverlay from '../Player/KeystrokePlaybackOverlay.jsx';
 import ShortcutsHelpModal from './ShortcutsHelpModal.jsx';
 import './SoloSpotlightModal.scss';
 
@@ -36,6 +37,7 @@ export default function SoloSpotlightModal({
     viewportStartMs = 0,
     onViewportStartChange,
     playheadMs = 0,
+    playheadEpochMs = 0,
     setPlayheadMs,
     inPointMs = 0,
     setInPointMs,
@@ -49,7 +51,10 @@ export default function SoloSpotlightModal({
     isLooping: propIsLooping = true,
     setIsLooping: propSetIsLooping,
     playbackSpeed: propPlaybackSpeed,
-    setPlaybackSpeed: propSetPlaybackSpeed
+    setPlaybackSpeed: propSetPlaybackSpeed,
+    keystrokeMode = 'BURN_IN',
+    onChangeKeystrokeMode,
+    keystrokes = []
 }) {
     const [localIsPlaying, setLocalIsPlaying] = useState(false);
     const isPlaying = propIsPlaying !== undefined ? propIsPlaying : localIsPlaying;
@@ -305,6 +310,8 @@ export default function SoloSpotlightModal({
 
     if (!isOpen || !station) return null;
 
+    const currentCalculatedEpoch = playheadEpochMs > 0 ? playheadEpochMs : Math.round(baseEpochMs + playheadMs);
+
     return createPortal(
         <div className="solo-spotlight-modal-overlay" dir="ltr">
             {exportToast && (
@@ -350,6 +357,14 @@ export default function SoloSpotlightModal({
                     globalGaps={activeGaps}
                     showWatermark={true}
                 />
+
+                {/* 💡 שכבת ה-HUD מעל נגן המסך המלא */}
+                <KeystrokePlaybackOverlay
+                    currentEpochMs={currentCalculatedEpoch}
+                    keystrokes={keystrokes}
+                    keystrokeMode={keystrokeMode}
+                />
+
                 <div className="canvas-scrim-top" />
                 <div className="canvas-scrim-bottom" />
             </div>
@@ -485,6 +500,9 @@ export default function SoloSpotlightModal({
                         onEstimateLoaded={(est) => {
                             if (est?.removedGlobalGaps) setActiveGaps(est.removedGlobalGaps);
                         }}
+                        keystrokeMode={keystrokeMode}
+                        onChangeKeystrokeMode={onChangeKeystrokeMode}
+                        showKeystrokes={keystrokeMode !== 'NONE'}
                     />
                 </div>
             </div>

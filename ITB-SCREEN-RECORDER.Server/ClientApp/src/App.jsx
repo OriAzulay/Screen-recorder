@@ -1,7 +1,7 @@
 ﻿// ==========================================
 // File: ClientApp/src/App.jsx
 // ==========================================
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as signalR from '@microsoft/signalr';
 import CommandCenterHeader from './components/Layout/CommandCenterHeader';
 import GlobalJobIndicator from './components/Layout/GlobalJobIndicator';
@@ -24,11 +24,26 @@ const resolveTimeOfDay = () => {
     return 'night';
 };
 
+const DISCONNECT_GRACE_PERIOD_MS = 8000;
+
 export default function App() {
     const [stations, setStations] = useState([]);
     const [serverTelemetry, setServerTelemetry] = useState(null);
     const [systemConfig, setSystemConfig] = useState(null);
     const [actionPending, setActionPending] = useState({});
+
+    const [isServerOfflineModal, setIsServerOfflineModal] = useState(false);
+    // 💡 שימוש ב-Lazy Initializer כדי למנוע יצירת Date חדש בכל רינדור
+    const [lastServerContact, setLastServerContact] = useState(() => new Date());
+    const [isRetryingConnection, setIsRetryingConnection] = useState(false);
+
+    // 💡 אתחול ה-Ref ל-0 בזמן ה-Render כדי לעמוד בחוק הטוהר של React
+    const lastContactTimestampRef = useRef(0);
+
+    // 💡 השמת חותמת הזמן הראשונית ב-Effect לאחר ה-Mount
+    useEffect(() => {
+        lastContactTimestampRef.current = Date.now();
+    }, []);
 
     const [hideOffline, setHideOffline] = useState(true);
     const [isFaultFilterActive, setIsFaultFilterActive] = useState(false);
@@ -43,8 +58,6 @@ export default function App() {
         return () => clearInterval(interval);
     }, []);
 
-    // 💡 בייצור (Production build) כל הקריאות יחסיות לחלוטין ('') ופונות אוטומטית לפורט שממנו נטען הדף.
-    // בפיתוח (Vite dev server) הפניות עוברות דרך הפרוקסי ב-vite.config.js.
     const isDev = import.meta.env.DEV;
     const apiBaseUrl = isDev ? (import.meta.env?.VITE_API_BASE_URL || '') : '';
 
@@ -61,38 +74,73 @@ export default function App() {
         };
     }, []);
 
-    // 💡 משיכת תחנות עם נתיב ה-Dashboard התקני
+    const registerServerHeartbeat = useCallback(() => {
+        lastContactTimestampRef.current = Date.now();
+        setLastServerContact(new Date());
+        setIsServerOfflineModal(false);
+        setIsRetryingConnection(false);
+    }, []);
+
+    useEffect(() => {
+        const checkConnectionTicker = setInterval(() => {
+            // 💡 מניעת בדיקה כשהרפרנס טרם אותחל ב-Mount
+            if (!lastContactTimestampRef.current) return;
+
+            const elapsedSinceLastContact = Date.now() - lastContactTimestampRef.current;
+            if (elapsedSinceLastContact >= DISCONNECT_GRACE_PERIOD_MS) {
+                setIsServerOfflineModal(true);
+            } else {
+                setIsServerOfflineModal(false);
+            }
+        }, 1000);
+
+        return () => clearInterval(checkConnectionTicker);
+    }, []);
+
     const fetchStations = useCallback(async () => {
         try {
-            let res = await fetch(`${apiBaseUrl}/api/v1/dashboard/stations`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+            let res = await fetch(`${apiBaseUrl}/api/v1/dashboard/stations`, { signal: controller.signal });
+            clearTimeout(timeoutId);
+
             if (!res.ok) {
                 res = await fetch(`${apiBaseUrl}/api/agents`);
             }
+
             if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data)) {
                     setStations(data);
                 }
+                registerServerHeartbeat();
             }
         } catch (err) {
-            console.error('[App] Failed to fetch stations:', err);
+            console.warn('[App] fetchStations timeout or error:', err.message);
         }
-    }, [apiBaseUrl]);
+    }, [apiBaseUrl, registerServerHeartbeat]);
 
     const fetchSystemConfig = useCallback(async () => {
         try {
-            let res = await fetch(`${apiBaseUrl}/api/v1/settings`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+            let res = await fetch(`${apiBaseUrl}/api/v1/settings`, { signal: controller.signal });
+            clearTimeout(timeoutId);
+
             if (!res.ok) {
                 res = await fetch(`${apiBaseUrl}/api/system/config`);
             }
             if (res.ok) {
                 const data = await res.json();
                 setSystemConfig(data);
+                registerServerHeartbeat();
             }
         } catch (err) {
-            console.error('[App] Failed to fetch system config:', err);
+            console.warn('[App] fetchSystemConfig timeout or error:', err.message);
         }
-    }, [apiBaseUrl]);
+    }, [apiBaseUrl, registerServerHeartbeat]);
 
     useEffect(() => {
         let isMounted = true;
@@ -108,19 +156,53 @@ export default function App() {
         };
 
         if (isMounted) loadInitialData();
-        return () => { isMounted = false; };
+
+        const heartbeatInterval = setInterval(() => {
+            fetchStations();
+        }, 4000);
+
+        return () => {
+            isMounted = false;
+            clearInterval(heartbeatInterval);
+        };
     }, [fetchStations, fetchSystemConfig]);
 
     useEffect(() => {
         const hubUrl = `${apiBaseUrl}/hubs/telemetry`;
         const connection = new signalR.HubConnectionBuilder()
             .withUrl(hubUrl)
-            .withAutomaticReconnect([0, 2000, 5000, 10000])
+            .withAutomaticReconnect({
+                nextRetryDelayInMilliseconds: (retryContext) => {
+                    if (retryContext.previousRetryCount === 0) return 0;
+                    if (retryContext.previousRetryCount <= 3) return 2000;
+                    return 5000;
+                }
+            })
             .build();
 
-        // מיזוג נתוני טלמטריה ללא דריסת מדדי שרת קיימים
+        connection.onreconnecting(() => {
+            console.warn('[App] SignalR reconnecting...');
+        });
+
+        connection.onreconnected(() => {
+            console.log('[App] SignalR reconnected successfully.');
+            registerServerHeartbeat();
+            fetchStations();
+            fetchSystemConfig();
+        });
+
+        connection.onclose(() => {
+            console.warn('[App] SignalR closed. Retrying in 5s...');
+            setTimeout(() => {
+                connection.start()
+                    .then(registerServerHeartbeat)
+                    .catch(() => { });
+            }, 5000);
+        });
+
         connection.on('ReceiveServerTelemetry', (telemetry) => {
             if (!telemetry) return;
+            registerServerHeartbeat();
             setServerTelemetry(prev => {
                 if (!prev) return telemetry;
                 return {
@@ -136,15 +218,16 @@ export default function App() {
         });
 
         connection.on('ReceiveMaintenanceJob', (job) => {
+            registerServerHeartbeat();
             setServerTelemetry(prev => ({
                 ...prev,
                 maintenanceJob: job
             }));
         });
 
-        // קליטת עדכוני מדדים של עמדה בודדת
         connection.on('ReceiveAgentMetrics', (report) => {
             if (!report) return;
+            registerServerHeartbeat();
             setStations(prev => {
                 const host = (report.hostname || report.stationId || '').toLowerCase();
                 const idx = prev.findIndex(s => (s.hostname || s.stationId || '').toLowerCase() === host);
@@ -161,13 +244,28 @@ export default function App() {
 
         connection.on('ReceiveAllStations', (allStations) => {
             if (Array.isArray(allStations)) {
+                registerServerHeartbeat();
                 setStations(allStations);
             }
         });
 
-        connection.start().catch(err => console.error('[App] SignalR Connection Error:', err));
+        connection.start()
+            .then(registerServerHeartbeat)
+            .catch(err => {
+                console.error('[App] Initial SignalR Connection Error:', err);
+            });
+
         return () => { connection.stop(); };
-    }, [apiBaseUrl]);
+    }, [apiBaseUrl, fetchStations, fetchSystemConfig, registerServerHeartbeat]);
+
+    const handleManualRetry = async () => {
+        setIsRetryingConnection(true);
+        await Promise.allSettled([
+            fetchStations(),
+            fetchSystemConfig()
+        ]);
+        setIsRetryingConnection(false);
+    };
 
     const sortedStations = useMemo(() => {
         return [...stations].sort((a, b) => {
@@ -252,7 +350,7 @@ export default function App() {
     };
 
     return (
-        <div className="itb-command-center-root" dir="ltr">
+        <div className={`itb-command-center-root ${isServerOfflineModal ? 'is-server-blurred' : ''}`} dir="ltr">
             <div
                 className="dynamic-wallpaper-layer"
                 style={{ backgroundImage: `url(${LOCAL_WALLPAPERS[timeOfDay]})` }}
@@ -270,6 +368,8 @@ export default function App() {
                     hideOffline={hideOffline}
                     isFaultFilterActive={isFaultFilterActive}
                     onToggleFaultFilter={() => setIsFaultFilterActive(prev => !prev)}
+                    isServerConnected={!isServerOfflineModal}
+                    lastServerContact={lastServerContact}
                 />
 
                 <DashboardGrid
@@ -286,6 +386,7 @@ export default function App() {
                     onToggleHideOffline={() => setHideOffline(prev => !prev)}
                     isFaultFilterActive={isFaultFilterActive}
                     onExitFaultFilter={() => setIsFaultFilterActive(false)}
+                    isServerConnected={!isServerOfflineModal}
                 />
 
                 {isSettingsOpen && (
@@ -297,6 +398,71 @@ export default function App() {
 
                 <GlobalJobIndicator />
             </div>
+
+            {/* Tactical C2 Server Disconnection Modal */}
+            {isServerOfflineModal && (
+                <div className="tactical-modal-backdrop" role="dialog" aria-modal="true">
+                    <div className="tactical-disconnect-modal-card">
+                        <div className="modal-top-accent-bar" />
+
+                        <div className="modal-header-section">
+                            <div className="disconnect-radar-emitter">
+                                <div className="radar-ring" />
+                                <div className="radar-core-dot" />
+                            </div>
+                            <div className="modal-title-group">
+                                <span className="modal-sub-tag">SYSTEM HEALTH ALERT</span>
+                                <h2 className="modal-main-title">C2 SERVER LINK LOST</h2>
+                            </div>
+                        </div>
+
+                        <div className="modal-body-section">
+                            <p className="modal-explanation">
+                                Communication with the central recording server has been lost. The display has been frozen to prevent stale telemetry display or invalid remote command dispatches.
+                            </p>
+
+                            <div className="disconnect-diagnostics-box">
+                                <div className="diag-row">
+                                    <span className="diag-label">STATUS</span>
+                                    <span className="diag-val red">SERVER OFFLINE (CONNECTION DROPPED)</span>
+                                </div>
+                                <div className="diag-row">
+                                    <span className="diag-label">LAST CONTACT</span>
+                                    <span className="diag-val mono">
+                                        {lastServerContact ? lastServerContact.toLocaleTimeString() : 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="diag-row">
+                                    <span className="diag-label">AUTO-RETRY</span>
+                                    <span className="diag-val cyan">
+                                        <span className="spinning-dot" /> RECONNECTING IN BACKGROUND...
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="modal-actions-section">
+                            <button
+                                type="button"
+                                className="btn-modal-reconnect"
+                                onClick={handleManualRetry}
+                                disabled={isRetryingConnection}
+                            >
+                                {isRetryingConnection ? (
+                                    <>
+                                        <span className="action-spinner" />
+                                        <span>CHECKING CONNECTION...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <span>⟳ RECONNECT NOW</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

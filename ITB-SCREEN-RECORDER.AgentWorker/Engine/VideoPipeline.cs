@@ -3,7 +3,6 @@
 // ==========================================
 using ITB_SCREEN_RECORDER.Core.Common;
 using ITBRecorderAgent.Providers.Video.Mouse;
-using ITBRecorderAgent.Providers.Video.Keyboard;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -117,9 +116,6 @@ namespace ITBRecorderAgent.Engine
 
                         // 1. הזרקת סמן העכבר, חיווי קליקים (L/R) וגלגול
                         MouseCursorOverlay.DrawMouseToFrame(buffer, width, height);
-
-                        // 2. הזרקת Keycaps של מקשי הקיצור במרכז המסך (Zero Overhead כשאף מקש לא נלחץ)
-                        KeystrokeOverlay.DrawKeystrokesToFrame(buffer, width, height);
 
                         if (_channel.Writer.TryWrite(buffer))
                         {

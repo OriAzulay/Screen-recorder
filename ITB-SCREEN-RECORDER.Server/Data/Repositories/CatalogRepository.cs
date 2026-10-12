@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Dapper;
+using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 using ITB_SCREEN_RECORDER.Core.Contracts.Storage;
 using ITB_SCREEN_RECORDER.Server.Data;
 
@@ -154,6 +155,46 @@ public sealed class CatalogRepository : ICatalogRepository
         tx.Commit();
     }
 
+    public async Task BulkInsertKeystrokesAsync(string stationId, IEnumerable<KeystrokeEventDto> events)
+    {
+        if (events == null || !events.Any()) return;
+
+        using var db = _factory.CreateConnection();
+        using var tx = db.BeginTransaction();
+
+        const string sql = @"
+            INSERT INTO keystroke_events (station_id, epoch_ms, key_combination, timestamp_utc)
+            VALUES (@StationId, @EpochMs, @KeyCombination, @TimestampUtc);
+        ";
+
+        var records = events.Select(e => new
+        {
+            StationId = stationId,
+            e.EpochMs,
+            e.KeyCombination,
+            TimestampUtc = e.TimestampUtc.ToString("o")
+        });
+
+        await db.ExecuteAsync(sql, records, tx);
+        tx.Commit();
+    }
+
+    public async Task<IReadOnlyList<KeystrokeEventDto>> GetKeystrokesForWindowAsync(string stationId, long fromEpochMs, long toEpochMs)
+    {
+        using var db = _factory.CreateConnection();
+        const string sql = @"
+            SELECT epoch_ms AS EpochMs, key_combination AS KeyCombination, timestamp_utc AS TimestampUtc
+            FROM keystroke_events INDEXED BY idx_keystrokes_station_epoch
+            WHERE station_id = @stationId
+              AND epoch_ms >= @fromEpochMs
+              AND epoch_ms <= @toEpochMs
+            ORDER BY epoch_ms ASC;
+        ";
+
+        var results = await db.QueryAsync<KeystrokeEventDto>(sql, new { stationId, fromEpochMs, toEpochMs });
+        return results.AsList();
+    }
+
     public async Task<string?> GetConfigurationAsync(string key)
     {
         using var db = _factory.CreateConnection();
@@ -246,5 +287,12 @@ public sealed class CatalogRepository : ICatalogRepository
         const string sql = "DELETE FROM station_overrides WHERE hostname = @hostname;";
         int affected = await db.ExecuteAsync(sql, new { hostname });
         return affected > 0;
+    }
+
+    public async Task<int> PurgeExpiredKeystrokesAsync(long cutoffEpochMs)
+    {
+        using var db = _factory.CreateConnection();
+        const string sql = "DELETE FROM keystroke_events WHERE epoch_ms < @cutoffEpochMs;";
+        return await db.ExecuteAsync(sql, new { cutoffEpochMs });
     }
 }

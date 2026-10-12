@@ -45,22 +45,17 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced
                 // 5. מטמון RAM עבור פריימים ו-LOD
                 services.AddMemoryCache();
 
-                // 6. שירותי מנוע העריכה המתקדם
+                // 6. שירותי NLE מתקדמים ודריסת מנוע החילוץ
                 services.AddSingleton<IFfmpegBinaryResolver, AdvancedFfmpegBinaryResolver>();
-                services.AddSingleton<IDummyVideoGenerator, AdvancedDummyVideoGenerator>();
-                services.AddSingleton<INoSignalPatternService, NoSignalPatternService>();
-                services.AddSingleton<IVideoMetadataService, VideoMetadataService>();
-                services.AddSingleton<IMediaProbeService, MediaProbeService>();
-                services.AddSingleton<IBridgeVideoGenerator, BridgeVideoGenerator>();
-                services.AddSingleton<ISynchronizationPlanBuilder, SynchronizationPlanBuilder>();
-                services.AddSingleton<ISynchronizedTrackCutter, SynchronizedTrackCutter>();
                 services.AddSingleton<AdvancedExtractorService>();
 
-                // 7. ניהול משימות NLE וניקוי רקע
+                // 💡 דריסת ממשק ה-Core כך שכל ייצוא במערכת ינותב דרך Advanced ויקבל תמיכה מלאה ב-Studio
+                services.AddSingleton<IExtractorService>(sp => sp.GetRequiredService<AdvancedExtractorService>());
+
+                // 7. ניהול משימות חיתוך מתקדמות
                 services.AddSingleton<AdvanceJobManager>();
                 services.AddSingleton<IAdvanceJobManager>(sp => sp.GetRequiredService<AdvanceJobManager>());
                 services.AddSingleton<IExportJobManager>(sp => sp.GetRequiredService<AdvanceJobManager>());
-                services.AddHostedService<ExtractorGarbageCollectorService>();
 
                 services.AddControllers()
                     .AddApplicationPart(typeof(ExtractorAdvancedHostingStartup).Assembly);

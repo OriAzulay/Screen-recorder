@@ -42,7 +42,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                     string originalId = b.Id.Contains('#') ? b.Id.Split('#')[0] : b.Id;
                     if (!seenIds.Add(originalId)) continue;
 
-                    // שחזור ה-DTO המקורי מתוך שדה Tags
                     if (!string.IsNullOrWhiteSpace(b.Tags))
                     {
                         try
@@ -57,7 +56,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
                         catch { }
                     }
 
-                    // שחזור ברירת מחדל מנתוני השורה
                     dtoList.Add(new InvestigationBookmarkDto
                     {
                         Id = originalId,
@@ -124,7 +122,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Controllers
 
                 string jsonPayload = JsonSerializer.Serialize(newBookmark);
 
-                // רישום רשומת הגנה במסד עבור כל תחנה שנכללה בסימנייה
                 if (newBookmark.StationIds != null && newBookmark.StationIds.Count > 0)
                 {
                     foreach (var stationId in newBookmark.StationIds)

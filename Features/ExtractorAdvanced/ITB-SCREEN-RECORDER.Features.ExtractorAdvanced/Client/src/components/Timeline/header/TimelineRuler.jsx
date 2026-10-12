@@ -3,7 +3,8 @@
 // ==========================================
 import React, { useRef, useMemo, useState, useEffect, useCallback } from 'react';
 import { formatTimelineClock } from '../../../../utils/timeFormat.js';
-import { findTransitionsInRange, formatLocalClockWithDst } from '../../../../utils/dstEngine.js';
+import { findTransitionsInRange, getLocalOffsetMinutes } from '../../../../utils/dstEngine.js';
+import TimelineKeystrokes from './TimelineKeystrokes.jsx';
 import './TimelineRuler.scss';
 
 const NICE_INTERVALS_MS = [
@@ -12,6 +13,8 @@ const NICE_INTERVALS_MS = [
     3600000, 7200000, 14400000, 21600000, 43200000,
     86400000
 ];
+
+const MONTH_NAMES = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
 export default function TimelineRuler({
     baseEpochMs = 0,
@@ -26,7 +29,8 @@ export default function TimelineRuler({
     _outPointMs,
     earliestMediaMs = null,
     movieBoundaries = null,
-    activeStationName = ''
+    activeStationName = '',
+    showKeystrokes = true
 }) {
     const rulerRef = useRef(null);
     const [pixelWidth, setPixelWidth] = useState(1000);
@@ -86,16 +90,38 @@ export default function TimelineRuler({
         return NICE_INTERVALS_MS[NICE_INTERVALS_MS.length - 1];
     }, [viewportDurationMs, pixelWidth]);
 
+    // 💡 חישוב שנתות מיושרות לפי שעות עגולות אבסולוטיות שאינן תלויות ב-Timezone של מערכת ההפעלה
     const ticks = useMemo(() => {
-        const result = [];
-        const firstTick = Math.ceil(viewportStartMs / tickIntervalMs) * tickIntervalMs;
-        const lastTick = viewportStartMs + viewportDurationMs;
+        if (!baseEpochMs || viewportDurationMs <= 0) return [];
 
-        for (let t = firstTick; t <= lastTick; t += tickIntervalMs) {
-            result.push(t);
+        const vpStartEpoch = baseEpochMs + viewportStartMs;
+        const vpEndEpoch = vpStartEpoch + viewportDurationMs;
+
+        // שימוש באופסט ה-DST של השרת במצב LOCAL כדי שהשנתות ייפלו תמיד על שעות מקומיות עגולות
+        const offsetMs = timeMode === 'LOCAL'
+            ? (getLocalOffsetMinutes(vpStartEpoch).offsetMin * 60 * 1000)
+            : 0;
+
+        const localStartEpoch = vpStartEpoch + offsetMs;
+        const firstLocalTick = Math.ceil(localStartEpoch / tickIntervalMs) * tickIntervalMs;
+
+        const result = [];
+        for (let localTick = firstLocalTick; localTick <= (vpEndEpoch + offsetMs); localTick += tickIntervalMs) {
+            const tickEpoch = localTick - offsetMs;
+            const pct = ((tickEpoch - vpStartEpoch) / viewportDurationMs) * 100;
+
+            if (pct >= 0 && pct <= 100) {
+                result.push({
+                    epoch: tickEpoch,
+                    pct,
+                    label: formatTimelineClock(tickEpoch, timeMode, {
+                        includeSeconds: tickIntervalMs < 60000
+                    })
+                });
+            }
         }
         return result;
-    }, [viewportStartMs, viewportDurationMs, tickIntervalMs]);
+    }, [baseEpochMs, viewportStartMs, viewportDurationMs, tickIntervalMs, timeMode]);
 
     const visibleDstTransitions = useMemo(() => {
         if (timeMode === 'UTC' || !baseEpochMs) return [];
@@ -108,6 +134,7 @@ export default function TimelineRuler({
         }));
     }, [baseEpochMs, viewportStartMs, viewportDurationMs, timeMode]);
 
+    // 💡 חישוב גבולות תאריכים (00:00) חסין Timezone הפועל ב-UTC נקי ומכייל לפי ה-DST
     const dateBoundaries = useMemo(() => {
         if (!viewportDurationMs || !baseEpochMs) return [];
 
@@ -116,30 +143,28 @@ export default function TimelineRuler({
         const isUtc = timeMode === 'UTC';
         const boundaries = [];
 
-        const cur = new Date(startEpoch);
-        if (isUtc) {
-            cur.setUTCHours(0, 0, 0, 0);
-            if (cur.getTime() < startEpoch) cur.setUTCDate(cur.getUTCDate() + 1);
-        } else {
-            cur.setHours(0, 0, 0, 0);
-            if (cur.getTime() < startEpoch) cur.setDate(cur.getDate() + 1);
+        const offsetMs = isUtc ? 0 : (getLocalOffsetMinutes(startEpoch).offsetMin * 60 * 1000);
+        const localStartEpoch = startEpoch + offsetMs;
+        const localEndEpoch = endEpoch + offsetMs;
+
+        const cur = new Date(localStartEpoch);
+        cur.setUTCHours(0, 0, 0, 0);
+        if (cur.getTime() < localStartEpoch) {
+            cur.setUTCDate(cur.getUTCDate() + 1);
         }
 
-        while (cur.getTime() <= endEpoch) {
-            const epoch = cur.getTime();
-            const offsetMs = epoch - baseEpochMs;
-            const pct = ((offsetMs - viewportStartMs) / viewportDurationMs) * 100;
+        while (cur.getTime() <= localEndEpoch) {
+            const localMidnightMs = cur.getTime();
+            const boundaryEpoch = localMidnightMs - offsetMs;
+            const pct = ((boundaryEpoch - startEpoch) / viewportDurationMs) * 100;
 
-            const dateLabel = cur.toLocaleDateString('en-GB', {
-                day: '2-digit',
-                month: 'short',
-                timeZone: isUtc ? 'UTC' : undefined
-            }).toUpperCase();
+            const dayStr = String(cur.getUTCDate()).padStart(2, '0');
+            const monthStr = MONTH_NAMES[cur.getUTCMonth()];
+            const dateLabel = `${dayStr} ${monthStr}`;
 
-            boundaries.push({ epoch, pct, dateLabel });
+            boundaries.push({ epoch: boundaryEpoch, pct, dateLabel });
 
-            if (isUtc) cur.setUTCDate(cur.getUTCDate() + 1);
-            else cur.setDate(cur.getDate() + 1);
+            cur.setUTCDate(cur.getUTCDate() + 1);
         }
 
         return boundaries;
@@ -253,20 +278,23 @@ export default function TimelineRuler({
             onClick={handleClick}
         >
             <div className="ruler-ticks-track">
-                {ticks.map(tickMs => {
-                    const pct = toPercent(tickMs);
-                    const epoch = baseEpochMs + tickMs;
-                    const label = timeMode === 'LOCAL'
-                        ? formatLocalClockWithDst(epoch)
-                        : formatTimelineClock(epoch, 'UTC');
+                {ticks.map(tick => (
+                    <div key={tick.epoch} className="ruler-tick" style={{ left: `${tick.pct}%` }}>
+                        <div className="tick-line" />
+                        <span className="tick-label">{tick.label}</span>
+                    </div>
+                ))}
 
-                    return (
-                        <div key={tickMs} className="ruler-tick" style={{ left: `${pct}%` }}>
-                            <div className="tick-line" />
-                            <span className="tick-label">{label}</span>
-                        </div>
-                    );
-                })}
+                {showKeystrokes && (
+                    <TimelineKeystrokes
+                        activeStationName={activeStationName}
+                        baseEpochMs={baseEpochMs}
+                        viewportStartMs={viewportStartMs}
+                        viewportDurationMs={viewportDurationMs}
+                        pixelWidth={pixelWidth}
+                        onSeek={onSeek}
+                    />
+                )}
 
                 {visibleDstTransitions.map(tr => (
                     <div
@@ -308,7 +336,7 @@ export default function TimelineRuler({
                     <div
                         key={pin.id}
                         className={pin.className}
-                        style={{ left: `${pin.pct}%` }}
+                        style={{ left: `${pin.pct}` }}
                         onClick={(e) => {
                             e.stopPropagation();
                             if (onSeek) onSeek(pin.ms);
@@ -329,7 +357,7 @@ export default function TimelineRuler({
             {isHoverVisible && (
                 <div className="ruler-hover-cursor" style={{ left: `${hoverPercent}%` }}>
                     <div className="hover-time-badge">
-                        {timeMode === 'LOCAL' ? formatLocalClockWithDst(baseEpochMs + hoverMs) : formatTimelineClock(baseEpochMs + hoverMs, 'UTC')}
+                        {formatTimelineClock(baseEpochMs + hoverMs, timeMode, { includeSeconds: true })}
                     </div>
                     <div className="hover-guide-line" />
                 </div>

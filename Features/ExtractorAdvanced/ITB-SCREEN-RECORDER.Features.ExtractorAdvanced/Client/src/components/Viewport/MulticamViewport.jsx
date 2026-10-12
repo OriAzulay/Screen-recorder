@@ -4,6 +4,7 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import CameraCard from './views/Card/CameraCard.jsx';
 import StudioVideoFeed from '../Player/StudioVideoFeed.jsx';
+import KeystrokePlaybackOverlay from '../Player/KeystrokePlaybackOverlay.jsx';
 import { calculateOptimalGrid } from './utils/viewportLayoutCalculator.js';
 import './MulticamViewport.scss';
 
@@ -30,8 +31,10 @@ export default function MulticamViewport({
     timelineStations = [],
     onSelectActiveStation,
     onOpenSpotlight,
+    onStationContextMenu, // 💡 פרופ חדש
     baseEpochMs = 0,
     playheadMs = 0,
+    playheadEpochMs = 0,
     timeMode = 'LOCAL',
     isPlaying = false,
     setIsPlaying,
@@ -41,7 +44,9 @@ export default function MulticamViewport({
     setPlayheadMs,
     globalGaps = [],
     recordingSegments = {},
-    playbackSpeed = 1
+    playbackSpeed = 1,
+    keystrokeMode = 'BURN_IN',
+    keystrokes = []
 }) {
     const containerRef = useRef(null);
     const [containerDimensions, setContainerDimensions] = useState({ width: 0, height: 0 });
@@ -86,8 +91,8 @@ export default function MulticamViewport({
     }, [setIsPlaying]);
 
     const currentEpochMs = useMemo(() => {
-        return Math.round(baseEpochMs + playheadMs);
-    }, [baseEpochMs, playheadMs]);
+        return playheadEpochMs > 0 ? playheadEpochMs : Math.round(baseEpochMs + playheadMs);
+    }, [playheadEpochMs, baseEpochMs, playheadMs]);
 
     useEffect(() => {
         if (!containerRef.current) return;
@@ -203,6 +208,12 @@ export default function MulticamViewport({
                             showWatermark={false}
                         />
 
+                        <KeystrokePlaybackOverlay
+                            currentEpochMs={currentEpochMs}
+                            keystrokes={keystrokes}
+                            keystrokeMode={keystrokeMode}
+                        />
+
                         <div className="spotlight-interaction-hint">
                             <span className="hint-pill">
                                 {isSingleStationMode ? 'L-Click: Fullscreen' : 'L-Click: Fullscreen • R-Click: Back to Grid'}
@@ -284,25 +295,31 @@ export default function MulticamViewport({
 
             <div className="multicam-tactical-grid" ref={containerRef} style={gridStyle}>
                 {visibleStations.map(st => (
-                    <CameraCard
+                    <div
                         key={st.id}
-                        station={st}
-                        isSolo={false}
-                        currentEpochMs={currentEpochMs}
-                        timeMode={timeMode}
-                        isPlaying={isPlaying}
-                        setIsPlaying={setIsPlaying}
-                        baseEpochMs={baseEpochMs}
-                        totalDurationMs={totalDurationMs}
-                        outPointMs={outPointMs}
-                        setPlayheadMs={setPlayheadMs}
-                        isSpotlightActive={isSpotlightActive}
-                        globalGaps={globalGaps}
-                        onOpenSpotlight={onOpenSpotlight}
-                        onSelectActiveStation={onSelectActiveStation}
-                        recordingSegments={recordingSegments}
-                        playbackSpeed={playbackSpeed}
-                    />
+                        className="multicam-card-cell-wrapper"
+                        onContextMenu={(e) => onStationContextMenu && onStationContextMenu(e, st)}
+                        style={{ width: '100%', height: '100%', minWidth: 0, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                        <CameraCard
+                            station={st}
+                            isSolo={false}
+                            currentEpochMs={currentEpochMs}
+                            timeMode={timeMode}
+                            isPlaying={isPlaying}
+                            setIsPlaying={setIsPlaying}
+                            baseEpochMs={baseEpochMs}
+                            totalDurationMs={totalDurationMs}
+                            outPointMs={outPointMs}
+                            setPlayheadMs={setPlayheadMs}
+                            isSpotlightActive={isSpotlightActive}
+                            globalGaps={globalGaps}
+                            onOpenSpotlight={onOpenSpotlight}
+                            onSelectActiveStation={onSelectActiveStation}
+                            recordingSegments={recordingSegments}
+                            playbackSpeed={playbackSpeed}
+                        />
+                    </div>
                 ))}
             </div>
         </div>

@@ -3,6 +3,7 @@
 // ==========================================
 using ITB_SCREEN_RECORDER.Core.Common;
 using ITB_SCREEN_RECORDER.Core.Configuration;
+using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 using ITB_SCREEN_RECORDER.Core.Contracts.Network;
 using ITB_SCREEN_RECORDER.Core.Contracts.Storage;
 using ITB_SCREEN_RECORDER.Server.Data.Repositories;
@@ -16,6 +17,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -34,10 +36,12 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public string? Bitrate { get; set; }
     }
 
+    // 💡 מודל טופס מאוחד: מונע קריסה של Swagger Generator ב-multipart/form-data
     public class UploadBufferRequest
     {
         public string Hostname { get; set; } = string.Empty;
         public IFormFile File { get; set; } = null!;
+        public IFormFile? KeysFile { get; set; }
     }
 
     [ApiController]
@@ -80,26 +84,39 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
 
             if (!ModelState.IsValid)
             {
-                var errors = string.Join(" | ", ModelState.Values
-                    .SelectMany(v => v.Errors)
-                    .Select(e => e.ErrorMessage));
+                var validationErrors = string.Join(" | ", ModelState.Values
+                    .SelectMany(value => value.Errors)
+                    .Select(error => error.ErrorMessage));
 
-                return BadRequest(errors);
+                return BadRequest(validationErrors);
+            }
+
+            // 💡 קליטת Keystrokes חיים שנשלחו בדוח הטלמטריה השוטף
+            if (report.Keystrokes != null && report.Keystrokes.Count > 0)
+            {
+                try
+                {
+                    await _catalogRepository.BulkInsertKeystrokesAsync(report.Hostname, report.Keystrokes);
+                    _logger.LogDebug("[TELEMETRY] Ingested {Count} live keystrokes for {Host}", report.Keystrokes.Count, report.Hostname);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[TELEMETRY] Failed to insert live keystrokes for {Host}", report.Hostname);
+                }
             }
 
             string requestHost = Request.Host.Host;
-            var response = await _telemetryState.ProcessHeartbeatAsync(report, requestHost);
+            var heartbeatResponse = await _telemetryState.ProcessHeartbeatAsync(report, requestHost);
 
-            // 💡 הבטחת חותמת Epoch עדכנית ברמת המילי-שנייה עבור ה-Agent
-            if (response != null)
+            if (heartbeatResponse != null)
             {
-                response.ServerUtcEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                response.ServerUtcTime = DateTime.UtcNow;
+                heartbeatResponse.ServerUtcEpochMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                heartbeatResponse.ServerUtcTime = DateTime.UtcNow;
             }
 
             _ = _broadcastService.BroadcastAgentUpdateAsync(report);
 
-            return Ok(response);
+            return Ok(heartbeatResponse);
         }
 
         [HttpPost("upload-buffer")]
@@ -128,37 +145,35 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
             }
 
             string hostname = request.Hostname;
-            IFormFile file = request.File;
-            string safeFileName = Path.GetFileName(file.FileName);
+            IFormFile videoFile = request.File;
+            string safeFileName = Path.GetFileName(videoFile.FileName);
 
-            // 1. איתור חותמת זמן UTC או Epoch מתוך שם הקובץ המקורי
             long startEpochMs = 0;
-            var matchUtc = Regex.Match(safeFileName, @"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{6})Z", RegexOptions.IgnoreCase);
-            var matchEpoch = Regex.Match(safeFileName, @"(\d{10,13})", RegexOptions.IgnoreCase);
+            var matchUtcPattern = Regex.Match(safeFileName, @"(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{6})Z", RegexOptions.IgnoreCase);
+            var matchEpochPattern = Regex.Match(safeFileName, @"(\d{10,13})", RegexOptions.IgnoreCase);
 
-            if (matchUtc.Success)
+            if (matchUtcPattern.Success)
             {
-                string utcString = matchUtc.Groups[1].Value;
+                string utcString = matchUtcPattern.Groups[1].Value;
                 if (DateTime.TryParseExact(utcString, "yyyy-MM-dd_HH-mm-ss-ffffff",
                     CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTime chunkUtcTime))
                 {
                     startEpochMs = new DateTimeOffset(chunkUtcTime, TimeSpan.Zero).ToUnixTimeMilliseconds();
                 }
             }
-            else if (matchEpoch.Success && long.TryParse(matchEpoch.Groups[1].Value, out long parsedEpoch))
+            else if (matchEpochPattern.Success && long.TryParse(matchEpochPattern.Groups[1].Value, out long parsedEpochValue))
             {
-                startEpochMs = parsedEpoch > 100000000000L ? parsedEpoch : parsedEpoch * 1000;
+                startEpochMs = parsedEpochValue > 100_000_000_000L ? parsedEpochValue : parsedEpochValue * 1000;
             }
 
             if (startEpochMs <= 0)
             {
                 _logger.LogWarning("[SYNC INGEST] Received buffer file '{File}' from host '{Host}' without valid UTC/Epoch signature.", safeFileName, hostname);
-                return BadRequest("Invalid file name format. Expected UTC timestamp signature ('..._YYYY-MM-DD_HH-mm-ss-ffffffZ.ext') or Epoch timestamp.");
+                return BadRequest("Invalid file name format. Expected UTC timestamp signature or Epoch timestamp.");
             }
 
-            // 💡 תיקון קריטי: שמירת הקובץ לפי ה-Epoch המוחלט שלו ללא שום המרה לשעון מקומי
-            string extension = Path.GetExtension(safeFileName);
-            string finalFileName = $"{startEpochMs}{extension}";
+            string fileExtension = Path.GetExtension(safeFileName);
+            string finalFileName = $"{startEpochMs}{fileExtension}";
 
             try
             {
@@ -172,22 +187,22 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
 
                 string destinationPath = Path.Combine(stationDirectory, finalFileName);
 
-                await using (var stream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                await using (var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
-                    await file.CopyToAsync(stream);
+                    await videoFile.CopyToAsync(fileStream);
                 }
 
                 long fileSizeBytes = new FileInfo(destinationPath).Length;
                 int chunkMinutes = Math.Max(1, _configMonitor.CurrentValue.Storage.ChunkIntervalMinutes);
                 long endEpochMs = startEpochMs + (chunkMinutes * 60 * 1000);
 
-                var agent = _telemetryState.GetAllAgents()
-                    .FirstOrDefault(a => string.Equals(a.Hostname, hostname, StringComparison.OrdinalIgnoreCase));
+                var agentSnapshot = _telemetryState.GetAllAgents()
+                    .FirstOrDefault(agent => string.Equals(agent.Hostname, hostname, StringComparison.OrdinalIgnoreCase));
 
-                int width = agent?.ScreenWidth > 0 ? agent.ScreenWidth : 0;
-                int height = agent?.ScreenHeight > 0 ? agent.ScreenHeight : 0;
-                int fps = agent?.ActualFps > 0 ? agent.ActualFps : (agent?.InternalCaptureFps > 0 ? agent.InternalCaptureFps : 0);
-                bool hasAudio = agent?.HasAudio ?? false;
+                int screenWidth = agentSnapshot?.ScreenWidth > 0 ? agentSnapshot.ScreenWidth : 0;
+                int screenHeight = agentSnapshot?.ScreenHeight > 0 ? agentSnapshot.ScreenHeight : 0;
+                int captureFps = agentSnapshot?.ActualFps > 0 ? agentSnapshot.ActualFps : (agentSnapshot?.InternalCaptureFps > 0 ? agentSnapshot.InternalCaptureFps : 0);
+                bool hasAudio = agentSnapshot?.HasAudio ?? false;
 
                 await _catalogRepository.BulkUpsertChunksAsync(new[]
                 {
@@ -198,12 +213,91 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
                         EndEpochMs: endEpochMs,
                         FileSizeBytes: fileSizeBytes,
                         IsFinalized: true,
-                        Width: width,
-                        Height: height,
-                        Fps: fps,
+                        Width: screenWidth,
+                        Height: screenHeight,
+                        Fps: captureFps,
                         HasAudio: hasAudio
                     )
                 });
+
+                // 💡 קליטת קובץ ה-Sidecar (.keys.jsonl) של המקשים שנשלח בטופס
+                var keysFile = request.KeysFile ?? Request.Form.Files["keysFile"] ?? Request.Form.Files["keys_file"];
+                if (keysFile != null && keysFile.Length > 0)
+                {
+                    _logger.LogInformation("[SYNC INGEST] Keys sidecar received for {Host}: '{FileName}' ({Length} bytes)",
+                        hostname, keysFile.FileName, keysFile.Length);
+
+                    var ingestedKeystrokes = new List<KeystrokeEventDto>();
+                    using (var streamReader = new StreamReader(keysFile.OpenReadStream()))
+                    {
+                        string? currentLine;
+                        int currentLineNumber = 0;
+                        while ((currentLine = await streamReader.ReadLineAsync()) != null)
+                        {
+                            currentLineNumber++;
+                            if (string.IsNullOrWhiteSpace(currentLine)) continue;
+
+                            try
+                            {
+                                using var jsonDocument = JsonDocument.Parse(currentLine);
+                                var jsonRoot = jsonDocument.RootElement;
+
+                                long extractedEpoch = 0;
+                                if (jsonRoot.TryGetProperty("epochMs", out var epochMsProperty) && epochMsProperty.TryGetInt64(out long parsedEpochMilliseconds))
+                                {
+                                    extractedEpoch = parsedEpochMilliseconds;
+                                }
+                                else if (jsonRoot.TryGetProperty("epoch", out var legacyEpochProperty) && legacyEpochProperty.TryGetInt64(out long parsedLegacyEpoch))
+                                {
+                                    extractedEpoch = parsedLegacyEpoch;
+                                }
+
+                                string keyCombination = string.Empty;
+                                if (jsonRoot.TryGetProperty("keyCombination", out var keyCombinationProperty))
+                                {
+                                    keyCombination = keyCombinationProperty.GetString() ?? string.Empty;
+                                }
+                                else if (jsonRoot.TryGetProperty("key", out var legacyKeyProperty))
+                                {
+                                    keyCombination = legacyKeyProperty.GetString() ?? string.Empty;
+                                }
+                                else if (jsonRoot.TryGetProperty("key_combination", out var snakeCaseKeyProperty))
+                                {
+                                    keyCombination = snakeCaseKeyProperty.GetString() ?? string.Empty;
+                                }
+
+                                if (extractedEpoch > 0 && !string.IsNullOrEmpty(keyCombination))
+                                {
+                                    long normalizedEpochMs = extractedEpoch > 100_000_000_000L ? extractedEpoch : extractedEpoch * 1000;
+                                    ingestedKeystrokes.Add(new KeystrokeEventDto
+                                    {
+                                        EpochMs = normalizedEpochMs,
+                                        KeyCombination = keyCombination,
+                                        TimestampUtc = DateTimeOffset.FromUnixTimeMilliseconds(normalizedEpochMs).UtcDateTime
+                                    });
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "[SYNC INGEST] Failed parsing keystroke line {LineNum} in '{FileName}'", currentLineNumber, keysFile.FileName);
+                            }
+                        }
+                    }
+
+                    if (ingestedKeystrokes.Count > 0)
+                    {
+                        await _catalogRepository.BulkInsertKeystrokesAsync(hostname, ingestedKeystrokes);
+                        _logger.LogInformation("[SYNC INGEST] Successfully parsed and ingested {Count} offline keys for {Host}", ingestedKeystrokes.Count, hostname);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[SYNC INGEST] Keys sidecar file '{FileName}' was present but yielded 0 valid keystrokes.", keysFile.FileName);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("[SYNC INGEST] No keys sidecar attached for chunk '{File}' from '{Host}'", safeFileName, hostname);
+                }
 
                 _logger.LogInformation("[SYNC INGEST] Synced & Indexed offline chunk from '{Host}': '{File}' (Epoch: {Epoch}, Size: {Size} bytes)",
                     hostname, finalFileName, startEpochMs, fileSizeBytes);
@@ -226,8 +320,8 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
             }
 
             var allOverrides = await _overridesService.GetAllAsync();
-            var stationConfig = allOverrides.TryGetValue(hostname, out var existing)
-                ? existing
+            var stationConfig = allOverrides.TryGetValue(hostname, out var existingConfig)
+                ? existingConfig
                 : new StationOverride();
 
             if (request.Fps.HasValue && request.Fps.Value >= 10 && request.Fps.Value <= 60)
@@ -284,8 +378,8 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
 
             if (request?.Hostnames != null && request.Hostnames.Any())
             {
-                var filterSet = new HashSet<string>(request.Hostnames, StringComparer.OrdinalIgnoreCase);
-                activeAgents = activeAgents.Where(agent => filterSet.Contains(agent.Hostname)).ToList();
+                var targetHostnameFilter = new HashSet<string>(request.Hostnames, StringComparer.OrdinalIgnoreCase);
+                activeAgents = activeAgents.Where(agent => targetHostnameFilter.Contains(agent.Hostname)).ToList();
             }
 
             foreach (var agent in activeAgents)
@@ -298,7 +392,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
                 Action = targetEnable ? "START_POLICY" : "STOP_POLICY",
                 IsFiltered = request?.Hostnames != null && request.Hostnames.Any(),
                 TargetStationCount = activeAgents.Count,
-                TargetHostnames = activeAgents.Select(a => a.Hostname).ToList(),
+                TargetHostnames = activeAgents.Select(agent => agent.Hostname).ToList(),
                 TimestampUtc = DateTime.UtcNow
             });
         }

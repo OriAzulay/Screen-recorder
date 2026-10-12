@@ -1,0 +1,182 @@
+// ==========================================
+// File: Features/Extractor/Client/src/components/Modals/ExportOptionsModal.scss
+// ==========================================
+
+.itb-export-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 8, 20, 0.75);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+
+    .itb-export-modal-card {
+        width: 490px;
+        background: #090e1a;
+        border: 1px solid rgba(0, 240, 255, 0.25);
+        border-radius: 8px;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 240, 255, 0.1);
+        display: flex;
+        flex-direction: column;
+        color: #f8fafc;
+        font-family: inherit;
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
+            background: #0d1527;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+
+            .header-title {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+
+                .dot {
+                    width: 7px;
+                    height: 7px;
+                    border-radius: 50%;
+                    background: #00f0ff;
+                    box-shadow: 0 0 8px #00f0ff;
+                }
+
+                h3 {
+                    margin: 0;
+                    font-size: 13px;
+                    font-weight: 800;
+                    letter-spacing: 0.5px;
+                    color: #00f0ff;
+                }
+            }
+
+            .btn-close {
+                background: none;
+                border: none;
+                color: #64748b;
+                font-size: 14px;
+                cursor: pointer;
+
+                &:hover {
+                    color: #f8fafc;
+                }
+            }
+        }
+
+        .modal-body {
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+
+            .summary-banner {
+                font-family: monospace;
+                font-size: 11px;
+                padding: 6px 10px;
+                background: rgba(15, 23, 42, 0.6);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 4px;
+                color: #94a3b8;
+            }
+
+            .options-title {
+                font-size: 10px;
+                font-weight: 700;
+                color: #64748b;
+                letter-spacing: 0.5px;
+            }
+
+            .modes-grid {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+
+                .mode-card {
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 12px;
+                    padding: 10px 14px;
+                    background: rgba(15, 23, 42, 0.5);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 6px;
+                    cursor: pointer;
+                    transition: all 0.15s ease;
+
+                    input[type="radio"] {
+                        margin-top: 3px;
+                        accent-color: #00f0ff;
+                    }
+
+                    .mode-content {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 2px;
+
+                        .mode-name {
+                            font-size: 11.5px;
+                            font-weight: 700;
+                            color: #cbd5e1;
+                        }
+
+                        .mode-desc {
+                            font-size: 10px;
+                            color: #64748b;
+                            line-height: 1.3;
+                        }
+                    }
+
+                    &:hover {
+                        border-color: rgba(0, 240, 255, 0.4);
+                        background: rgba(0, 240, 255, 0.03);
+                    }
+
+                    &.active {
+                        border-color: #00f0ff;
+                        background: rgba(0, 240, 255, 0.06);
+
+                        .mode-name {
+                            color: #00f0ff;
+                        }
+                    }
+                }
+            }
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 12px 18px;
+            background: #0d1527;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+
+            button {
+                padding: 6px 14px;
+                font-size: 11px;
+                font-weight: 700;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+
+            .btn-cancel {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                color: #cbd5e1;
+            }
+
+            .btn-confirm {
+                background: #00f0ff;
+                border: none;
+                color: #040814;
+                box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+
+                &:hover {
+                    background: #38bdf8;
+                }
+            }
+        }
+    }
+}

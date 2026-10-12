@@ -81,8 +81,13 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
         ".mp4", ".fmp4", ".flv", ".mkv", ".ts"
     };
 
+    // 💡 תמיכה כפולה: תבנית תאריך קלאסית + תבנית Epoch של MediaMTX (%s_%f)
     private static readonly Regex UniversalChunkRegex = new(
         @"(?:^(?<host>[a-zA-Z0-9_\-\.]+?)[_-])?(?<year>20\d{2})[-_]?(?<month>\d{2})[-_]?(?<day>\d{2})[-_T](?<hour>\d{2})[-_:]?(?<minute>\d{2})[-_:]?(?<sec>\d{2})(?:[_\-\.]\d+)?(?<utc>Z)?\.(mp4|fmp4|flv|mkv|ts)$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex EpochChunkRegex = new(
+        @"(?:^(?<host>[a-zA-Z0-9_\-\.]+?)[_-])?(?<epoch>\d{10})(?:[_\-\.](?<micro>\d{1,6}))?(?:[_\-\.][a-zA-Z0-9]+)?\.(mp4|fmp4|flv|mkv|ts|mov)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public CatalogMaintenanceService(
@@ -268,7 +273,8 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
             {
                 string stationName = Path.GetFileName(stationPath);
                 var dirFiles = Directory.GetFiles(stationPath, "*.*", SearchOption.AllDirectories)
-                    .Where(f => VideoExtensions.Contains(Path.GetExtension(f)));
+                    .Where(f => VideoExtensions.Contains(Path.GetExtension(f)))
+                    .OrderBy(f => f);
 
                 foreach (var f in dirFiles)
                 {
@@ -280,8 +286,9 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
             int scanned = 0, added = 0, skipped = 0, errors = 0;
             var batch = new List<ChunkInsertItem>();
 
-            foreach (var item in allFilesToScan)
+            for (int i = 0; i < allFilesToScan.Count; i++)
             {
+                var item = allFilesToScan[i];
                 scanned++;
 
                 if (!forceFullRecheck && existingValidPaths.Contains(item.FilePath))
@@ -307,7 +314,7 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
                                 int height = 0;
                                 int fps = 0;
                                 bool hasAudio = false;
-                                long durationMs;
+                                long durationMs = 0;
 
                                 if (probe != null && probe.DurationSeconds > 0)
                                 {
@@ -317,7 +324,21 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
                                     fps = probe.Fps;
                                     hasAudio = probe.HasAudio;
                                 }
-                                else
+
+                                // 💡 חישוב משך חכם: אם ה-Probe לא מחזיר משך, בודקים את נקודת ההתחלה של הקובץ הבא באותה עמדה
+                                if (durationMs <= 0)
+                                {
+                                    if (i + 1 < allFilesToScan.Count && string.Equals(allFilesToScan[i + 1].StationName, item.StationName, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        var nextStart = TryParseFileTimestamp(Path.GetFileName(allFilesToScan[i + 1].FilePath), config.DisplayTimezone);
+                                        if (nextStart.HasValue && nextStart.Value > startMs && (nextStart.Value - startMs) <= (30 * 60 * 1000L))
+                                        {
+                                            durationMs = nextStart.Value - startMs;
+                                        }
+                                    }
+                                }
+
+                                if (durationMs <= 0)
                                 {
                                     int fallbackMin = Math.Max(1, config.Storage?.ChunkIntervalMinutes ?? 15);
                                     durationMs = fallbackMin * 60 * 1000L;
@@ -332,9 +353,9 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
                                     EndEpochMs: endMs,
                                     DurationMs: durationMs,
                                     FileSizeBytes: fileSize,
-                                    Width: width,
-                                    Height: height,
-                                    Fps: fps,
+                                    Width: width > 0 ? width : 1920,
+                                    Height: height > 0 ? height : 1080,
+                                    Fps: fps > 0 ? fps : 30,
                                     HasAudio: hasAudio ? 1 : 0
                                 ));
 
@@ -418,6 +439,8 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
         cmd.ExecuteNonQuery();
 
         using var tx = db.BeginTransaction();
+
+        // 💡 עדכון מלא ומדויק של start, end ו-duration גם ב-ON CONFLICT
         const string sql = @"
             INSERT INTO recording_chunks (
                 station_id, file_path, start_epoch_ms, end_epoch_ms, 
@@ -426,11 +449,15 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
                 @StationId, @FilePath, @StartEpochMs, @EndEpochMs, 
                 @DurationMs, @FileSizeBytes, @Width, @Height, @Fps, @HasAudio, 1, @Now
             ) ON CONFLICT(file_path) DO UPDATE SET
+                start_epoch_ms = excluded.start_epoch_ms,
+                end_epoch_ms = excluded.end_epoch_ms,
                 duration_ms = excluded.duration_ms,
-                width = excluded.width,
-                height = excluded.height,
-                fps = excluded.fps,
-                has_audio = excluded.has_audio;";
+                file_size_bytes = excluded.file_size_bytes,
+                width = CASE WHEN excluded.width > 0 THEN excluded.width ELSE recording_chunks.width END,
+                height = CASE WHEN excluded.height > 0 THEN excluded.height ELSE recording_chunks.height END,
+                fps = CASE WHEN excluded.fps > 0 THEN excluded.fps ELSE recording_chunks.fps END,
+                has_audio = excluded.has_audio,
+                is_finalized = 1;";
 
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var b in batch)
@@ -453,7 +480,6 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
         tx.Commit();
     }
 
-    // 💡 שידור מבוקר לערוץ ייעודי ללא דריסת מדדי השרת וה-Uptime
     private void UpdateState(Func<MaintenanceJobState, MaintenanceJobState> update, bool forceBroadcast = false)
     {
         MaintenanceJobState stateSnapshot;
@@ -480,36 +506,51 @@ public class CatalogMaintenanceService : BackgroundService, ICatalogMaintenanceS
 
     private static long? TryParseFileTimestamp(string fileName, string? configuredTzId)
     {
+        // 1. עדיפות עליונה: תבנית Epoch של MediaMTX (%s_%f או %s)
+        var matchEpoch = EpochChunkRegex.Match(fileName);
+        if (matchEpoch.Success)
+        {
+            if (long.TryParse(matchEpoch.Groups["epoch"].Value, out long sec))
+            {
+                long micro = matchEpoch.Groups["micro"].Success && long.TryParse(matchEpoch.Groups["micro"].Value, out long m) ? m : 0;
+                return (sec * 1000L) + (micro / 1000L);
+            }
+        }
+
+        // 2. תבנית תאריך קלאסית (YYYY-MM-DD...)
         var match = UniversalChunkRegex.Match(fileName);
-        if (!match.Success) return null;
-
-        int year = int.Parse(match.Groups["year"].Value);
-        int month = int.Parse(match.Groups["month"].Value);
-        int day = int.Parse(match.Groups["day"].Value);
-        int hour = int.Parse(match.Groups["hour"].Value);
-        int minute = int.Parse(match.Groups["minute"].Value);
-        int second = int.Parse(match.Groups["sec"].Value);
-
-        if (match.Groups["utc"].Success)
+        if (match.Success)
         {
-            return new DateTimeOffset(new DateTime(year, month, day, hour, minute, second, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+            int year = int.Parse(match.Groups["year"].Value);
+            int month = int.Parse(match.Groups["month"].Value);
+            int day = int.Parse(match.Groups["day"].Value);
+            int hour = int.Parse(match.Groups["hour"].Value);
+            int minute = int.Parse(match.Groups["minute"].Value);
+            int second = int.Parse(match.Groups["sec"].Value);
+
+            if (match.Groups["utc"].Success)
+            {
+                return new DateTimeOffset(new DateTime(year, month, day, hour, minute, second, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+            }
+
+            TimeZoneInfo tz;
+            try
+            {
+                tz = !string.IsNullOrWhiteSpace(configuredTzId)
+                    ? TimeZoneInfo.FindSystemTimeZoneById(configuredTzId)
+                    : TimeZoneInfo.Local;
+            }
+            catch
+            {
+                tz = TimeZoneInfo.Local;
+            }
+
+            var localDt = new DateTime(year, month, day, hour, minute, second, DateTimeKind.Unspecified);
+            DateTime utc = TimeZoneInfo.ConvertTimeToUtc(localDt, tz);
+            return new DateTimeOffset(utc, TimeSpan.Zero).ToUnixTimeMilliseconds();
         }
 
-        TimeZoneInfo tz;
-        try
-        {
-            tz = !string.IsNullOrWhiteSpace(configuredTzId)
-                ? TimeZoneInfo.FindSystemTimeZoneById(configuredTzId)
-                : TimeZoneInfo.Local;
-        }
-        catch
-        {
-            tz = TimeZoneInfo.Local;
-        }
-
-        var localDt = new DateTime(year, month, day, hour, minute, second, DateTimeKind.Unspecified);
-        DateTime utc = TimeZoneInfo.ConvertTimeToUtc(localDt, tz);
-        return new DateTimeOffset(utc, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        return null;
     }
 
     private sealed record ChunkInsertItem(
