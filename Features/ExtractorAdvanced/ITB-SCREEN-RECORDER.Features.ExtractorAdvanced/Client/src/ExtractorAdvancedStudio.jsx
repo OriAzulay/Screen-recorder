@@ -454,6 +454,9 @@ export default function ExtractorAdvancedStudio() {
     const isInitialSetup = !isWorkspaceActive || selectedStationIds.length === 0;
     const currentPlayheadEpochMs = timelineBaseEpochMs + playheadMs;
 
+    // 💡 האם Spotlight מוצג כעת במסך מלא
+    const isSpotlightOpen = Boolean(spotlightStationId && spotlightStation);
+
     return (
         <div className="extractor-advanced-studio">
             <div className="studio-workspace-area">
@@ -490,7 +493,8 @@ export default function ExtractorAdvancedStudio() {
                                     playheadMs={playheadMs}
                                     playheadEpochMs={currentPlayheadEpochMs}
                                     timeMode={timeMode}
-                                    isPlaying={isPlaying}
+                                    /* 💡 קריטי: כאשר Spotlight פתוח, משביתים את הניגון והסאונד ב-Viewport שמתחתיו */
+                                    isPlaying={isSpotlightOpen ? false : isPlaying}
                                     setIsPlaying={setIsPlaying}
                                     totalDurationMs={totalTimelineDurationMs}
                                     inPointMs={inPointMs}
@@ -626,7 +630,7 @@ export default function ExtractorAdvancedStudio() {
             />
 
             <SoloSpotlightModal
-                isOpen={Boolean(spotlightStationId && spotlightStation)}
+                isOpen={isSpotlightOpen}
                 station={spotlightStation}
                 allStations={timelineStations}
                 onSelectStation={(newId) => {

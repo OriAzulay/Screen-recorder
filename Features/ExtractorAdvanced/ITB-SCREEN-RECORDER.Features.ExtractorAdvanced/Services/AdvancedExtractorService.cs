@@ -111,13 +111,15 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
 
             DateTime targetUtc = DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime;
 
-            var chunks = await _storageScanner.GetChunksForStationAsync(hostname, targetUtc.AddMinutes(-10), targetUtc.AddMinutes(10));
+            var chunks = await _storageScanner.GetChunksForStationAsync(hostname, targetUtc.AddMinutes(-5), targetUtc.AddMinutes(5));
+
+            // 💡 חילוץ קפדני: מאתרים אך ורק מקטע שמכסה את נקודת הזמן בפועל (עם סבילות של ±2 שניות לתפרי צ'אנקים).
+            // הוסר ה-Fallback ההרסני ששלף פריים מקובץ עתידי כשהפלייהד עמד בפער ריק!
             var matchingChunk = chunks.FirstOrDefault(c =>
                 !string.IsNullOrEmpty(c.FullPath) &&
                 File.Exists(c.FullPath) &&
-                c.StartUtc <= targetUtc.AddSeconds(1) &&
-                targetUtc.AddSeconds(-1) <= c.EndUtc)
-                ?? chunks.OrderBy(c => Math.Abs((c.StartUtc - targetUtc).TotalSeconds)).FirstOrDefault(c => File.Exists(c.FullPath));
+                c.StartUtc <= targetUtc.AddSeconds(2) &&
+                targetUtc.AddSeconds(-2) <= c.EndUtc);
 
             string ffmpegPath = ResolveFfmpegBinary();
 
@@ -228,7 +230,6 @@ namespace ITB_SCREEN_RECORDER.Features.ExtractorAdvanced.Services
             return new MemoryStream(fallbackTile);
         }
 
-        // 💡 חילוץ פריים יציב ואמין ב-15ms ללא התנגשות מול מקודד ה-MJPEG
         private async Task<byte[]?> ExtractKeyframeDirectAsync(
             string ffmpegPath,
             string inputPath,

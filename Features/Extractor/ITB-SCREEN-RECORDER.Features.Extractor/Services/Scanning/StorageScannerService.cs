@@ -100,7 +100,7 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                             PRAGMA temp_store=MEMORY;
                             PRAGMA busy_timeout=30000;
                             CREATE INDEX IF NOT EXISTS idx_chunks_station_range 
-                            ON recording_chunks (station_id, start_epoch_ms, end_epoch_ms);";
+                            ON recording_chunks (station_id COLLATE NOCASE, start_epoch_ms, end_epoch_ms);";
                         cmd.ExecuteNonQuery();
                         _pragmaInitialized = true;
                     }
@@ -117,7 +117,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 
             var hostsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // 1. שליפה מ-SQLite
             try
             {
                 using var conn = OpenCatalogDbConnection();
@@ -139,7 +138,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 _logger.LogWarning(ex, "[STORAGE SCANNER] Failed querying available hosts from DB.");
             }
 
-            // 2. סריקת תיקיות פיזיות בדיסק (עבור תחנות שהועתקו ידנית או באופליין)
             foreach (var root in ResolveActiveStorageRoots().Where(Directory.Exists))
             {
                 try
@@ -171,11 +169,11 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
             long startMs = new DateTimeOffset(startUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
             long endMs = new DateTimeOffset(endUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
 
-            // 1. שליפת כל המקטעים שכבר קיימים ב-DB
+            // 1. שליפה מהירה מה-DB עם תמיכה מלאה ב-COLLATE NOCASE
             var dbChunks = await QueryChunksFromDbAsync(hostname, startMs, endMs);
             var knownPaths = new HashSet<string>(dbChunks.Select(c => c.FullPath), StringComparer.OrdinalIgnoreCase);
 
-            // 2. סריקת דיסק נקודתית לגילוי קבצים שטרם אונדקסו
+            // 2. סריקה דינמית בדיסק לאיתור קבצים שטרם אונדקסו
             var missingOnDisk = await ScanUnindexedFilesForStationAsync(hostname, startMs, endMs, knownPaths);
 
             if (missingOnDisk.Count > 0)
@@ -183,10 +181,7 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 _logger.LogInformation("[STORAGE SCANNER] Found {Count} unindexed file(s) on disk for '{Host}'. Auto-indexing immediately...",
                     missingOnDisk.Count, hostname);
 
-                // שמירה ל-DB
                 await FlushChunksBatchAsync(missingOnDisk);
-
-                // שליפה מחדש של הרשימה המעודכנת
                 return await QueryChunksFromDbAsync(hostname, startMs, endMs);
             }
 
@@ -196,6 +191,8 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
         private async Task<List<RecordingChunkMetadata>> QueryChunksFromDbAsync(string hostname, long startMs, long endMs)
         {
             using var conn = OpenCatalogDbConnection();
+
+            // 💡 שימוש ב-COLLATE NOCASE למניעת אי-התאמות בין אותיות קטנות לגדולות
             const string sql = @"
                 SELECT file_path AS FullPath, station_id AS Hostname,
                        start_epoch_ms AS StartEpochMs, end_epoch_ms AS EndEpochMs,
@@ -205,7 +202,7 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                        COALESCE(fps, 30) AS Fps,
                        COALESCE(has_audio, 1) AS HasAudio
                 FROM recording_chunks
-                WHERE station_id = @hostname
+                WHERE station_id = @hostname COLLATE NOCASE
                   AND end_epoch_ms >= @startMs
                   AND start_epoch_ms <= @endMs
                 ORDER BY start_epoch_ms ASC;";
@@ -243,9 +240,24 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
 
             foreach (var root in roots)
             {
-                string p1 = Path.Combine(root, hostname);
-                string p2 = Path.Combine(root, "live", hostname);
-                string? targetDir = Directory.Exists(p1) ? p1 : (Directory.Exists(p2) ? p2 : null);
+                // 💡 איתור תיקיית התחנה ללא תלות ב-Case Sensitivity (תואם לינוקס ווינדוס כאחד)
+                string? targetDir = null;
+                try
+                {
+                    targetDir = Directory.EnumerateDirectories(root)
+                        .FirstOrDefault(d => string.Equals(Path.GetFileName(d), hostname, StringComparison.OrdinalIgnoreCase));
+
+                    if (targetDir == null)
+                    {
+                        string liveDir = Path.Combine(root, "live");
+                        if (Directory.Exists(liveDir))
+                        {
+                            targetDir = Directory.EnumerateDirectories(liveDir)
+                                .FirstOrDefault(d => string.Equals(Path.GetFileName(d), hostname, StringComparison.OrdinalIgnoreCase));
+                        }
+                    }
+                }
+                catch { }
 
                 if (targetDir == null) continue;
 
@@ -263,7 +275,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                         long fStart = new DateTimeOffset(parsed.StartUtc, TimeSpan.Zero).ToUnixTimeMilliseconds();
                         long fEnd = fStart + defaultDurationMs;
 
-                        // אם קיים קובץ עוקב, זמן הסיום של הנוכחי הוא זמן ההתחלה של העוקב
                         if (i + 1 < candidateFiles.Count)
                         {
                             var nextParsed = TryParseChunkFast(candidateFiles[i + 1], hostname);
@@ -277,7 +288,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                             }
                         }
 
-                        // בדיקה אם הקובץ נופל בטווח המבוקש
                         if (fEnd >= startMs && fStart <= endMs)
                         {
                             var fi = new FileInfo(file);
@@ -536,7 +546,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 }
             }
 
-            // 1. תבנית Epoch (%s_%f או %s)
             var matchEpoch = EpochChunkRegex.Match(fileName);
             if (matchEpoch.Success)
             {
@@ -558,7 +567,6 @@ namespace ITB_SCREEN_RECORDER.Features.Extractor.Services
                 };
             }
 
-            // 2. תבנית תאריך קלאסית (YYYY-MM-DD...)
             var match = UniversalChunkRegex.Match(fileName);
             if (match.Success)
             {

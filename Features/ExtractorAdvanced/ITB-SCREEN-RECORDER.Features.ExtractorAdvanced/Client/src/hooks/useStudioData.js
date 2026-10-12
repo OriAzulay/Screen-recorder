@@ -48,8 +48,6 @@ export function useStudioData(timelineBaseEpochMs, totalTimelineDurationMs, time
                         feedSpec: item.feedSpec || '1080p • 30fps'
                     }));
 
-                    // 💡 פיוס נתונים חכם (Smart Reconciliation):
-                    // שומרים על אותם אובייקטים בזיכרון עבור תחנות קיימות כדי למנוע רינדורי-סווק
                     setAllStations(prevStations => {
                         if (!prevStations || prevStations.length === 0) return normalized;
 
@@ -63,7 +61,6 @@ export function useStudioData(timelineBaseEpochMs, totalTimelineDurationMs, time
                                 return nextItem;
                             }
 
-                            // בדיקה האם משהו מהותי השתנה בתחנה
                             const isIdentical =
                                 prevItem.isOnline === nextItem.isOnline &&
                                 prevItem.displayName === nextItem.displayName &&
@@ -72,7 +69,7 @@ export function useStudioData(timelineBaseEpochMs, totalTimelineDurationMs, time
                                 prevItem.fps === nextItem.fps;
 
                             if (isIdentical) {
-                                return prevItem; // שמירה על אותו אובייקט בדיוק בזיכרון!
+                                return prevItem;
                             }
 
                             hasAnyChange = true;
@@ -94,10 +91,18 @@ export function useStudioData(timelineBaseEpochMs, totalTimelineDurationMs, time
         fetchActiveStationsForTimeScope();
     }, [fetchActiveStationsForTimeScope]);
 
-    const stationIdsKey = useMemo(() => allStations.map(s => s.id).sort().join(','), [allStations]);
+    // 💡 שליחת מזהים ייחודיים (כולל שמות מחשב) למניעת איבוד מקטעים
+    const stationQueryKeys = useMemo(() => {
+        const set = new Set();
+        allStations.forEach(s => {
+            if (s.id) set.add(s.id);
+            if (s.hostname) set.add(s.hostname);
+        });
+        return Array.from(set).sort().join(',');
+    }, [allStations]);
 
     useEffect(() => {
-        if (!stationIdsKey || isNaN(timelineBaseEpochMs)) {
+        if (!stationQueryKeys || isNaN(timelineBaseEpochMs)) {
             setRecordingSegments({});
             return;
         }
@@ -106,22 +111,24 @@ export function useStudioData(timelineBaseEpochMs, totalTimelineDurationMs, time
         const fetchSegments = async () => {
             try {
                 const endEpochMs = timelineBaseEpochMs + totalTimelineDurationMs;
-                const res = await fetch(`/api/v1/extractor/timeline-segments?stations=${stationIdsKey}&startEpoch=${timelineBaseEpochMs}&endEpoch=${endEpochMs}`);
+                const res = await fetch(`/api/v1/extractor/timeline-segments?stations=${encodeURIComponent(stationQueryKeys)}&startEpoch=${timelineBaseEpochMs}&endEpoch=${endEpochMs}`);
                 if (res.ok && isMounted) {
-                    const data = await res.json();
+                    const rawData = await res.json() || {};
 
-                    // 💡 מיזוג חכם של סגמנטים: לא דורסים את ה-state אם התוכן זהה
-                    setRecordingSegments(prev => {
-                        const nextData = data || {};
-                        const prevKeys = Object.keys(prev);
-                        const nextKeys = Object.keys(nextData);
-
-                        if (prevKeys.length === nextKeys.length &&
-                            prevKeys.every(k => prev[k]?.length === nextData[k]?.length)) {
-                            return prev;
-                        }
-                        return nextData;
+                    // 💡 מיפוי כפול (Dual Keying): הנגשת המקטעים גם לפי station.id וגם לפי station.hostname
+                    const normalizedMap = {};
+                    allStations.forEach(st => {
+                        const segs = rawData[st.id] || rawData[st.hostname] || rawData[st.displayName] || [];
+                        normalizedMap[st.id] = segs;
+                        normalizedMap[st.hostname] = segs;
                     });
+
+                    // שמירה גם של כל מפתח ישיר שהשרת החזיר
+                    Object.keys(rawData).forEach(k => {
+                        if (!normalizedMap[k]) normalizedMap[k] = rawData[k];
+                    });
+
+                    setRecordingSegments(normalizedMap);
                 }
             } catch {
                 if (isMounted) setRecordingSegments({});
@@ -130,7 +137,7 @@ export function useStudioData(timelineBaseEpochMs, totalTimelineDurationMs, time
 
         fetchSegments();
         return () => { isMounted = false; };
-    }, [stationIdsKey, timelineBaseEpochMs, totalTimelineDurationMs]);
+    }, [stationQueryKeys, timelineBaseEpochMs, totalTimelineDurationMs, allStations]);
 
     const movieBoundaries = useMemo(() => {
         if (!allStations.length || !timelineBaseEpochMs) {

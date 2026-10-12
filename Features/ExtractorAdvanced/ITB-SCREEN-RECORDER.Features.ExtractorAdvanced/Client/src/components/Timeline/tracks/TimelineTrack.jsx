@@ -6,32 +6,22 @@ import { spritesheetStore } from '../../../utils/spritesheetStore.js';
 import './TimelineTrack.scss';
 
 const getLodConfig = (viewportDurationMs) => {
-    if (viewportDurationMs <= 60 * 1000) {
-        return { tileDurationMs: 4 * 1000, framesPerTile: 4 };
-    } else if (viewportDurationMs <= 5 * 60 * 1000) {
-        return { tileDurationMs: 15 * 1000, framesPerTile: 5 };
-    } else if (viewportDurationMs <= 30 * 60 * 1000) {
-        return { tileDurationMs: 60 * 1000, framesPerTile: 6 };
-    } else if (viewportDurationMs <= 2 * 60 * 60 * 1000) {
-        return { tileDurationMs: 4 * 60 * 1000, framesPerTile: 6 };
-    } else if (viewportDurationMs <= 8 * 60 * 60 * 1000) {
-        return { tileDurationMs: 15 * 60 * 1000, framesPerTile: 6 };
-    } else {
-        return { tileDurationMs: 60 * 60 * 1000, framesPerTile: 6 };
-    }
+    if (viewportDurationMs <= 60 * 1000) return { tileDurationMs: 4 * 1000, framesPerTile: 4 };
+    if (viewportDurationMs <= 5 * 60 * 1000) return { tileDurationMs: 15 * 1000, framesPerTile: 5 };
+    if (viewportDurationMs <= 30 * 60 * 1000) return { tileDurationMs: 60 * 1000, framesPerTile: 6 };
+    if (viewportDurationMs <= 2 * 60 * 60 * 1000) return { tileDurationMs: 4 * 60 * 1000, framesPerTile: 6 };
+    if (viewportDurationMs <= 8 * 60 * 60 * 1000) return { tileDurationMs: 15 * 60 * 1000, framesPerTile: 6 };
+    return { tileDurationMs: 60 * 60 * 1000, framesPerTile: 6 };
 };
 
-const getSegStart = (seg) =>
-    seg.startEpochMs ?? seg.startEpoch ?? seg.StartEpoch ?? seg.start ?? (seg.startUtc ? new Date(seg.startUtc).getTime() : 0);
-
-const getSegEnd = (seg) =>
-    seg.endEpochMs ?? seg.endEpoch ?? seg.EndEpoch ?? seg.end ?? (seg.endUtc ? new Date(seg.endUtc).getTime() : 0);
+const getSegStart = (seg) => seg.startEpochMs ?? seg.startEpoch ?? seg.start ?? 0;
+const getSegEnd = (seg) => seg.endEpochMs ?? seg.endEpoch ?? seg.end ?? 0;
 
 export default function TimelineTrack({
     station,
     isActive,
     onSelect,
-    onStationContextMenu, // 💡 פרופ חדש
+    onStationContextMenu,
     viewportStartMs = 0,
     viewportDurationMs = 3600000,
     inPointMs,
@@ -43,16 +33,15 @@ export default function TimelineTrack({
     disableFilmstrip = false
 }) {
     const [tilesMap, setTilesMap] = useState({});
-    const hostname = station?.hostname || station?.id || station?.name || '';
+    const hostname = station?.hostname || station?.name || '';
+    const stationId = station?.id || hostname;
 
+    // 💡 תיקון: שליפת המקטעים לפי id התחנה (מניעת Tracks ריקים)
     const activeSegments = useMemo(() => {
-        const stationSegs = recordingSegments[hostname] || rawSegments || [];
+        const stationSegs = recordingSegments[stationId] || recordingSegments[hostname] || rawSegments || [];
         if (!stationSegs || stationSegs.length === 0) return [];
-        return stationSegs.filter(s => {
-            const dur = getSegEnd(s) - getSegStart(s);
-            return dur > 0;
-        });
-    }, [recordingSegments, rawSegments, hostname]);
+        return stationSegs.filter(s => (getSegEnd(s) - getSegStart(s)) > 0);
+    }, [recordingSegments, rawSegments, stationId, hostname]);
 
     const lodConfig = useMemo(() => getLodConfig(viewportDurationMs), [viewportDurationMs]);
 
@@ -76,7 +65,6 @@ export default function TimelineTrack({
 
             const visibleSegStart = Math.max(segStart, cullStartEpoch);
             const visibleSegEnd = Math.min(segEnd, cullEndEpoch);
-
             if (visibleSegEnd <= visibleSegStart) return;
 
             const firstTileStart = Math.floor(visibleSegStart / tileDurationMs) * tileDurationMs;
@@ -86,16 +74,15 @@ export default function TimelineTrack({
                 const clampedStart = Math.max(segStart, tStart);
                 const clampedEnd = Math.min(segEnd, tEnd);
 
-                if (clampedEnd <= clampedStart) continue;
-
-                const key = `${hostname}_${clampedStart}_${clampedEnd}_${framesPerTile}`;
-                tiles.push({
-                    key,
-                    sIdx,
-                    startEpoch: clampedStart,
-                    endEpoch: clampedEnd,
-                    framesPerTile
-                });
+                if (clampedEnd > clampedStart) {
+                    tiles.push({
+                        key: `${hostname}_${clampedStart}_${clampedEnd}_${framesPerTile}`,
+                        sIdx,
+                        startEpoch: clampedStart,
+                        endEpoch: clampedEnd,
+                        framesPerTile
+                    });
+                }
             }
         });
 
@@ -124,13 +111,9 @@ export default function TimelineTrack({
             }
         });
 
-        if (hasImmediate) {
-            setTilesMap(prev => ({ ...prev, ...immediateUpdates }));
-        }
+        if (hasImmediate) setTilesMap(prev => ({ ...prev, ...immediateUpdates }));
 
-        if (missingTiles.length === 0) {
-            return () => { isMounted = false; };
-        }
+        if (missingTiles.length === 0) return () => { isMounted = false; };
 
         const debounceTimer = setTimeout(() => {
             missingTiles.forEach(tile => {
@@ -233,48 +216,39 @@ export default function TimelineTrack({
 
         if (globalGaps && globalGaps.length > 0) {
             globalGaps.forEach((g, idx) => {
-                const gStart = g.startEpochMs;
-                const gEnd = g.endEpochMs;
+                const boundedStart = Math.max(g.startEpochMs, effectiveInEpoch);
+                const boundedEnd = Math.min(g.endEpochMs, effectiveOutEpoch);
 
-                const boundedStart = Math.max(gStart, effectiveInEpoch);
-                const boundedEnd = Math.min(gEnd, effectiveOutEpoch);
+                if (boundedEnd > boundedStart && boundedEnd > vpStartEpoch && boundedStart < vpEndEpoch) {
+                    const clStartEpoch = Math.max(vpStartEpoch, boundedStart);
+                    const clEndEpoch = Math.min(vpEndEpoch, boundedEnd);
+                    const widthPct = (((clEndEpoch - baseEpochMs) - (clStartEpoch - baseEpochMs)) / viewportDurationMs) * 100;
 
-                if (boundedEnd <= boundedStart) return;
-                if (boundedEnd <= vpStartEpoch || boundedStart >= vpEndEpoch) return;
-
-                const clStartEpoch = Math.max(vpStartEpoch, boundedStart);
-                const clEndEpoch = Math.min(vpEndEpoch, boundedEnd);
-                const startMs = clStartEpoch - baseEpochMs;
-                const endMs = clEndEpoch - baseEpochMs;
-
-                const widthPct = ((endMs - startMs) / viewportDurationMs) * 100;
-                if (widthPct > 0) {
-                    resultGaps.push({
-                        id: `global-${idx}`,
-                        type: 'global',
-                        leftPct: ((startMs - vpStart) / viewportDurationMs) * 100,
-                        widthPct,
-                        durationSec: Math.round((boundedEnd - boundedStart) / 1000)
-                    });
+                    if (widthPct > 0) {
+                        resultGaps.push({
+                            id: `global-${idx}`,
+                            type: 'global',
+                            leftPct: (((clStartEpoch - baseEpochMs) - vpStart) / viewportDurationMs) * 100,
+                            widthPct,
+                            durationSec: Math.round((boundedEnd - boundedStart) / 1000)
+                        });
+                    }
                 }
             });
         }
 
         rawStationEmptyRanges.forEach((range, rIdx) => {
             let subRanges = [range];
-
             if (globalGaps && globalGaps.length > 0) {
                 globalGaps.forEach(g => {
                     const boundedStart = Math.max(g.startEpochMs, effectiveInEpoch);
                     const boundedEnd = Math.min(g.endEpochMs, effectiveOutEpoch);
-
                     if (boundedEnd <= boundedStart) return;
 
                     const nextSubs = [];
                     subRanges.forEach(sub => {
-                        if (boundedEnd <= sub.startEpoch || boundedStart >= sub.endEpoch) {
-                            nextSubs.push(sub);
-                        } else {
+                        if (boundedEnd <= sub.startEpoch || boundedStart >= sub.endEpoch) nextSubs.push(sub);
+                        else {
                             if (boundedStart > sub.startEpoch) nextSubs.push({ startEpoch: sub.startEpoch, endEpoch: boundedStart });
                             if (boundedEnd < sub.endEpoch) nextSubs.push({ startEpoch: boundedEnd, endEpoch: sub.endEpoch });
                         }
@@ -288,15 +262,13 @@ export default function TimelineTrack({
 
                 const clStartEpoch = Math.max(vpStartEpoch, sub.startEpoch);
                 const clEndEpoch = Math.min(vpEndEpoch, sub.endEpoch);
-                const startMs = clStartEpoch - baseEpochMs;
-                const endMs = clEndEpoch - baseEpochMs;
+                const widthPct = (((clEndEpoch - baseEpochMs) - (clStartEpoch - baseEpochMs)) / viewportDurationMs) * 100;
 
-                const widthPct = ((endMs - startMs) / viewportDurationMs) * 100;
                 if (widthPct > 0) {
                     resultGaps.push({
                         id: `station-${rIdx}-${sIdx}`,
                         type: 'station',
-                        leftPct: ((startMs - vpStart) / viewportDurationMs) * 100,
+                        leftPct: (((clStartEpoch - baseEpochMs) - vpStart) / viewportDurationMs) * 100,
                         widthPct,
                         durationSec: Math.round((sub.endEpoch - sub.startEpoch) / 1000)
                     });
@@ -307,13 +279,12 @@ export default function TimelineTrack({
         return resultGaps;
     }, [activeSegments, globalGaps, baseEpochMs, viewportStartMs, viewportDurationMs, inPointMs, outPointMs]);
 
-    const stationName = station?.displayName || station?.hostname || station?.name || '';
+    const stationDisplayName = station?.displayName || station?.hostname || station?.name || '';
 
     return (
         <div
             onClick={onSelect}
             onContextMenu={(e) => {
-                // 💡 קליק ימני על כל שטח השורה של התחנה בטיים-ליין
                 if (onStationContextMenu) {
                     e.preventDefault();
                     e.stopPropagation();
@@ -322,9 +293,9 @@ export default function TimelineTrack({
             }}
             className={`timeline-track-container ${isActive ? 'active-track' : 'collapsed-track'}`}
         >
-            <div className="track-sidebar" title={`Right-click to deselect ${stationName}`}>
+            <div className="track-sidebar" title={`Right-click to deselect ${stationDisplayName}`}>
                 <div className={`status-indicator ${station?.isOnline ? 'online' : 'idle'}`} />
-                <span className="station-label" title={stationName}>{stationName}</span>
+                <span className="station-label" title={stationDisplayName}>{stationDisplayName}</span>
             </div>
 
             <div className="track-canvas">
