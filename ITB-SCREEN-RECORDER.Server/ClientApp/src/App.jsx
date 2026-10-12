@@ -33,9 +33,17 @@ export default function App() {
     const [actionPending, setActionPending] = useState({});
 
     const [isServerOfflineModal, setIsServerOfflineModal] = useState(false);
-    const [lastServerContact, setLastServerContact] = useState(new Date());
+    // 💡 שימוש ב-Lazy Initializer כדי למנוע יצירת Date חדש בכל רינדור
+    const [lastServerContact, setLastServerContact] = useState(() => new Date());
     const [isRetryingConnection, setIsRetryingConnection] = useState(false);
-    const lastContactTimestampRef = useRef(Date.now());
+
+    // 💡 אתחול ה-Ref ל-0 בזמן ה-Render כדי לעמוד בחוק הטוהר של React
+    const lastContactTimestampRef = useRef(0);
+
+    // 💡 השמת חותמת הזמן הראשונית ב-Effect לאחר ה-Mount
+    useEffect(() => {
+        lastContactTimestampRef.current = Date.now();
+    }, []);
 
     const [hideOffline, setHideOffline] = useState(true);
     const [isFaultFilterActive, setIsFaultFilterActive] = useState(false);
@@ -75,6 +83,9 @@ export default function App() {
 
     useEffect(() => {
         const checkConnectionTicker = setInterval(() => {
+            // 💡 מניעת בדיקה כשהרפרנס טרם אותחל ב-Mount
+            if (!lastContactTimestampRef.current) return;
+
             const elapsedSinceLastContact = Date.now() - lastContactTimestampRef.current;
             if (elapsedSinceLastContact >= DISCONNECT_GRACE_PERIOD_MS) {
                 setIsServerOfflineModal(true);
