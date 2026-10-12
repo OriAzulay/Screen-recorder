@@ -1,0 +1,267 @@
+// ==========================================
+// File: Client/src/components/Auth/RoleLaunchpad.scss
+// ==========================================
+.role-launchpad-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: radial-gradient(circle at 50% 30%, #0c1427 0%, #030712 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    box-sizing: border-box;
+
+    .launchpad-container {
+        width: 100%;
+        max-width: 1100px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 36px;
+
+        .launchpad-header {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+
+            .launchpad-brand {
+                font-family: var(--font-primary, 'Inter', sans-serif);
+                font-size: 2rem;
+                font-weight: 900;
+                letter-spacing: 0.05em;
+
+                .brand-accent {
+                    color: var(--accent-cyan-light, #38BDF8);
+                    margin-right: 10px;
+                }
+
+                .brand-main {
+                    color: #F8FAFC;
+                }
+            }
+
+            .launchpad-subtitle {
+                font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                font-size: 0.85rem;
+                color: var(--text-secondary, #94A3B8);
+                letter-spacing: 0.02em;
+            }
+        }
+
+        .roles-tactical-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            width: 100%;
+
+            .role-launchpad-card {
+                position: relative;
+                background: rgba(15, 23, 42, 0.7);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: var(--radius-card, 16px);
+                backdrop-filter: blur(20px);
+                cursor: pointer;
+                overflow: hidden;
+                transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+
+                .role-card-glow-edge {
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    height: 3px;
+                    background: var(--role-accent, #06B6D4);
+                    opacity: 0.6;
+                    transition: opacity 0.2s ease;
+                }
+
+                .role-card-inner {
+                    padding: 28px 22px;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    text-align: center;
+                    gap: 14px;
+
+                    .role-icon-box {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: var(--radius-md, 12px);
+                        background: rgba(255, 255, 255, 0.04);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: var(--role-accent, #06B6D4);
+                        transition: all 0.2s ease;
+
+                        svg {
+                            width: 28px;
+                            height: 28px;
+                        }
+                    }
+
+                    .role-name {
+                        font-family: var(--font-primary, 'Inter', sans-serif);
+                        font-size: 1.15rem;
+                        font-weight: 800;
+                        color: #F8FAFC;
+                        margin: 0;
+                    }
+
+                    .role-desc {
+                        font-family: var(--font-primary, 'Inter', sans-serif);
+                        font-size: 0.8rem;
+                        color: var(--text-secondary, #94A3B8);
+                        line-height: 1.4;
+                        margin: 0;
+                        min-height: 36px;
+                    }
+
+                    .role-action-pill {
+                        margin-top: 6px;
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                        font-family: var(--font-mono, 'JetBrains Mono', monospace);
+                        font-size: 0.72rem;
+                        font-weight: 800;
+                        color: var(--role-accent, #06B6D4);
+                        background: rgba(255, 255, 255, 0.04);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        padding: 6px 14px;
+                        border-radius: var(--radius-full, 9999px);
+                        transition: all 0.2s ease;
+                    }
+                }
+
+                &:hover {
+                    transform: translateY(-4px);
+                    border-color: var(--role-accent, #06B6D4);
+                    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(6, 182, 212, 0.2);
+
+                    .role-card-glow-edge {
+                        opacity: 1;
+                    }
+
+                    .role-icon-box {
+                        background: var(--role-accent);
+                        color: #000;
+                    }
+
+                    .role-action-pill {
+                        background: var(--role-accent);
+                        color: #000;
+                    }
+                }
+            }
+        }
+    }
+
+    .strict-login-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.75);
+        backdrop-filter: blur(12px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+
+        .strict-login-modal-card {
+            background: #0f172a;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            width: 380px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+
+            .modal-header {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+
+                .target-role-badge {
+                    align-self: flex-start;
+                    font-size: 10px;
+                    font-weight: 800;
+                    padding: 3px 8px;
+                    border-radius: 9999px;
+                    color: #000;
+                }
+
+                h3 {
+                    margin: 0;
+                    font-size: 1.1rem;
+                    color: #fff;
+                }
+            }
+
+            .login-error-banner {
+                background: rgba(239, 68, 68, 0.15);
+                border: 1px solid #ef4444;
+                color: #f87171;
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-size: 0.78rem;
+            }
+
+            .form-group {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+
+                label {
+                    font-size: 0.78rem;
+                    color: #94a3b8;
+                    font-weight: 600;
+                }
+
+                input {
+                    height: 38px;
+                    background: rgba(30, 41, 59, 0.6);
+                    border: 1px solid rgba(148, 163, 184, 0.2);
+                    border-radius: 8px;
+                    padding: 0 12px;
+                    color: #fff;
+                    outline: none;
+
+                    &:focus {
+                        border-color: #38bdf8;
+                    }
+                }
+            }
+
+            .modal-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+                margin-top: 6px;
+
+                button {
+                    height: 36px;
+                    padding: 0 16px;
+                    border-radius: 8px;
+                    font-weight: 700;
+                    cursor: pointer;
+                }
+
+                .btn-cancel {
+                    background: transparent;
+                    border: 1px solid rgba(148, 163, 184, 0.2);
+                    color: #94a3b8;
+                }
+
+                .btn-submit {
+                    background: #06b6d4;
+                    border: none;
+                    color: #000;
+                }
+            }
+        }
+    }
+}
