@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using ITB_SCREEN_RECORDER.Server.Data.Repositories;
 using ITB_SCREEN_RECORDER.Server.Models.Security;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple = true)]
@@ -47,26 +49,62 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
 
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PermissionRequirement requirement)
     {
-        // 1. מעקף במצב Open Mode: כל הפעולות מאושרות
-        var policy = await _repository.GetSecurityPolicyAsync();
-        if (policy.CurrentMode == AuthMode.Open)
-        {
-            context.Succeed(requirement);
-            return;
-        }
-
-        // 2. מעקף משתמש על (Root Superuser)
+        // 1. משתמש העל (ROOT) מורשה תמיד לכל פעולה
         if (context.User.HasClaim("is_root", "true"))
         {
             context.Succeed(requirement);
             return;
         }
 
-        // 3. בדיקת הרשאה ספציפית ב-Claims
+        // 2. משתמש הנושא את מפתח ההרשאה הספציפי
         if (context.User.HasClaim("perm", requirement.Permission))
         {
             context.Succeed(requirement);
             return;
         }
+
+        // 3. מצב פתוח (Open Mode) - מאפשר אך ורק הרשאות מבצעיות!
+        // הרשאות settings ו-security מוגנות תמיד ומחייבות מנהל מאומת:
+        var policy = await _repository.GetSecurityPolicyAsync();
+        if (policy.CurrentMode == AuthMode.Open)
+        {
+            bool isProtectedAdminPermission =
+                requirement.Permission.StartsWith("settings.", StringComparison.OrdinalIgnoreCase) ||
+                requirement.Permission.StartsWith("security.", StringComparison.OrdinalIgnoreCase);
+
+            if (!isProtectedAdminPermission)
+            {
+                context.Succeed(requirement);
+                return;
+            }
+        }
+    }
+}
+
+public sealed class CustomAuthorizationMiddlewareResultHandler : IAuthorizationMiddlewareResultHandler
+{
+    public async Task HandleAsync(
+        RequestDelegate next,
+        HttpContext context,
+        AuthorizationPolicy policy,
+        PolicyAuthorizationResult authorizeResult)
+    {
+        if (authorizeResult.Challenged)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"message\":\"Unauthorized: Administrator credentials required.\"}");
+            return;
+        }
+
+        if (authorizeResult.Forbidden)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"message\":\"Forbidden: Insufficient administrative privileges.\"}");
+            return;
+        }
+
+        await next(context);
     }
 }

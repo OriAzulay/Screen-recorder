@@ -15,8 +15,8 @@ using Microsoft.Extensions.Options;
 
 public interface ISecurityService
 {
-    Task<IReadOnlyList<string>> CalculateEffectivePermissionsAsync(string userId, string roleId, bool isSystemImmutable);
-    string GenerateJwtToken(string userId, string username, string roleId, IReadOnlyList<string> permissions, bool isSystemImmutable);
+    Task<IReadOnlyList<string>> CalculateAllUserPermissionsAsync(string userId, IEnumerable<string> roleIds, bool isSystemImmutable);
+    string GenerateJwtToken(string userId, string username, IEnumerable<string> roleIds, IReadOnlyList<string> permissions, bool isSystemImmutable);
     ClaimsPrincipal? ValidateJwtToken(string token);
     Task<AuthResult> LoginAsync(string username, string password);
 }
@@ -44,7 +44,6 @@ public sealed class SecurityService : ISecurityService
     {
         var policy = await _repository.GetSecurityPolicyAsync();
 
-        // 1. נסיון אימות מקומי תחילה (מאפשר תמיד כניסת משתמש העל / Break-Glass)
         var localResult = await _localAuth.AuthenticateAsync(username, password);
         if (localResult.Success)
         {
@@ -52,7 +51,6 @@ public sealed class SecurityService : ISecurityService
             return localResult;
         }
 
-        // 2. אם במצב StrictLdap - פנייה ל-Active Directory
         if (policy.CurrentMode == AuthMode.StrictLdap)
         {
             var ldapResult = await _ldapAuth.AuthenticateAsync(username, password);
@@ -62,34 +60,40 @@ public sealed class SecurityService : ISecurityService
         return localResult;
     }
 
-    public async Task<IReadOnlyList<string>> CalculateEffectivePermissionsAsync(string userId, string roleId, bool isSystemImmutable)
+    public async Task<IReadOnlyList<string>> CalculateAllUserPermissionsAsync(string userId, IEnumerable<string> roleIds, bool isSystemImmutable)
     {
-        // משתמש העל מקבל תמיד את כלל ההרשאות
         if (isSystemImmutable)
         {
             return PermissionKeys.All;
         }
 
-        var role = await _repository.GetRoleByIdAsync(roleId);
-        var permissions = new HashSet<string>(role?.Permissions ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        var allRoles = await _repository.GetAllRolesAsync();
+        var rolesLookup = allRoles.ToDictionary(r => r.Id, StringComparer.OrdinalIgnoreCase);
+
+        var permissions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rId in roleIds)
+        {
+            if (rolesLookup.TryGetValue(rId, out var role))
+            {
+                foreach (var p in role.Permissions)
+                {
+                    permissions.Add(p);
+                }
+            }
+        }
 
         var user = await _repository.GetUserByIdAsync(userId);
         if (user != null)
         {
-            foreach (var granted in user.PermissionOverridesGranted)
-            {
-                permissions.Add(granted);
-            }
-            foreach (var revoked in user.PermissionOverridesRevoked)
-            {
-                permissions.Remove(revoked);
-            }
+            foreach (var granted in user.PermissionOverridesGranted) permissions.Add(granted);
+            foreach (var revoked in user.PermissionOverridesRevoked) permissions.Remove(revoked);
         }
 
         return permissions.ToList();
     }
 
-    public string GenerateJwtToken(string userId, string username, string roleId, IReadOnlyList<string> permissions, bool isSystemImmutable)
+    public string GenerateJwtToken(string userId, string username, IEnumerable<string> roleIds, IReadOnlyList<string> permissions, bool isSystemImmutable)
     {
         var secConfig = _configMonitor.CurrentValue.Security;
         string secretKey = !string.IsNullOrWhiteSpace(secConfig?.JwtSecretKey) && secConfig.JwtSecretKey.Length >= 16
@@ -105,7 +109,7 @@ public sealed class SecurityService : ISecurityService
         {
             ["sub"] = userId,
             ["name"] = username,
-            ["role"] = roleId,
+            ["roles"] = roleIds.ToArray(),
             ["is_root"] = isSystemImmutable ? "true" : "false",
             ["perm"] = permissions,
             ["iat"] = iat,
@@ -143,10 +147,7 @@ public sealed class SecurityService : ISecurityService
         byte[] expectedSig = hmac.ComputeHash(Encoding.UTF8.GetBytes($"{parts[0]}.{parts[1]}"));
         byte[] actualSig = Base64UrlDecode(parts[2]);
 
-        if (!CryptographicOperations.FixedTimeEquals(expectedSig, actualSig))
-        {
-            return null;
-        }
+        if (!CryptographicOperations.FixedTimeEquals(expectedSig, actualSig)) return null;
 
         try
         {
@@ -162,18 +163,23 @@ public sealed class SecurityService : ISecurityService
             var claims = new List<Claim>();
             if (root.TryGetProperty("sub", out var sub)) claims.Add(new Claim(ClaimTypes.NameIdentifier, sub.GetString() ?? string.Empty));
             if (root.TryGetProperty("name", out var name)) claims.Add(new Claim(ClaimTypes.Name, name.GetString() ?? string.Empty));
-            if (root.TryGetProperty("role", out var role)) claims.Add(new Claim(ClaimTypes.Role, role.GetString() ?? string.Empty));
             if (root.TryGetProperty("is_root", out var isRoot)) claims.Add(new Claim("is_root", isRoot.GetString() ?? "false"));
+
+            if (root.TryGetProperty("roles", out var rolesElem) && rolesElem.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var r in rolesElem.EnumerateArray())
+                {
+                    var rVal = r.GetString();
+                    if (!string.IsNullOrEmpty(rVal)) claims.Add(new Claim(ClaimTypes.Role, rVal));
+                }
+            }
 
             if (root.TryGetProperty("perm", out var perms) && perms.ValueKind == JsonValueKind.Array)
             {
                 foreach (var p in perms.EnumerateArray())
                 {
                     var val = p.GetString();
-                    if (!string.IsNullOrEmpty(val))
-                    {
-                        claims.Add(new Claim("perm", val));
-                    }
+                    if (!string.IsNullOrEmpty(val)) claims.Add(new Claim("perm", val));
                 }
             }
 
@@ -186,13 +192,8 @@ public sealed class SecurityService : ISecurityService
         }
     }
 
-    private static string Base64UrlEncode(byte[] input)
-    {
-        return Convert.ToBase64String(input)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
+    private static string Base64UrlEncode(byte[] input) =>
+        Convert.ToBase64String(input).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static byte[] Base64UrlDecode(string input)
     {

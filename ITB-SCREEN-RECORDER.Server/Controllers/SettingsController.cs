@@ -3,6 +3,7 @@
 // ==========================================
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using ITB_SCREEN_RECORDER.Server.Services;
@@ -17,7 +18,10 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
     public record CreateUserRequest(string Username, string DisplayName, string Password, List<string> RoleIds);
     public record UpdateUserRequest(List<string> RoleIds, List<string> GrantedOverrides, List<string> RevokedOverrides);
     public record SetUserPasswordRequest(string NewPassword);
-    public record SetSecurityModeRequest(AuthMode Mode);
+    public class SetSecurityModeRequest
+    {
+        public AuthMode Mode { get; set; }
+    }
     public record UpdateLdapSettingsRequest(string Server, int Port, string BaseDn, bool UseSsl);
     public record UpsertLdapMappingRequest(string AdGroupName, string RoleId);
 
@@ -65,7 +69,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         [AuthorizePermission(PermissionKeys.SettingsAgents)]
         public async Task<IActionResult> Save([FromBody] SystemConfig updatedConfig)
         {
-            if (updatedConfig == null) return BadRequest("Invalid configuration payload.");
+            if (updatedConfig == null) return BadRequest(new { message = "Invalid configuration payload." });
 
             try
             {
@@ -140,7 +144,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
             }
         }
 
-        #region Security & Policy API (דף ההגדרות החדש)
+        #region Security & Policy API
 
         [HttpGet("security/policy")]
         [AuthorizePermission(PermissionKeys.SettingsView)]
@@ -154,28 +158,38 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         [AuthorizePermission(PermissionKeys.SecurityRolesManage)]
         public async Task<IActionResult> SetSecurityMode([FromBody] SetSecurityModeRequest req)
         {
+            if (req == null)
+            {
+                return BadRequest(new { message = "Invalid request payload." });
+            }
+
             // בדיקת הגנה מנעילה (Pre-Flight Lockout Validation)
             if (req.Mode != AuthMode.Open)
             {
+                // בדיקה אם קיים משתמש העל הסודי או משתמש אדמין מקומי פעיל
+                var rootUser = await _catalogRepo.GetUserByUsernameAsync("sys_master");
+                bool hasRootAdmin = rootUser != null && rootUser.IsActive;
+
                 var users = await _catalogRepo.GetAllUsersAsync();
-                bool hasLocalAdmins = false;
-                foreach (var u in users)
+                bool hasOtherAdmins = users.Any(u => u.IsActive && u.AssignedRoleIds.Contains("role_admin", StringComparer.OrdinalIgnoreCase));
+
+                if (!hasRootAdmin && !hasOtherAdmins && req.Mode == AuthMode.StrictLocal)
                 {
-                    if (u.IsActive && u.AssignedRoleIds.Contains("role_admin"))
-                    {
-                        hasLocalAdmins = true;
-                        break;
-                    }
+                    return BadRequest(new { message = "Cannot switch to StrictLocal: No active local administrator account found." });
                 }
 
-                if (!hasLocalAdmins && req.Mode == AuthMode.StrictLocal)
+                if (req.Mode == AuthMode.StrictLdap)
                 {
-                    return BadRequest("Cannot switch to StrictLocal: No active local administrator account found.");
+                    var policy = await _catalogRepo.GetSecurityPolicyAsync();
+                    if (string.IsNullOrWhiteSpace(policy.LdapServer))
+                    {
+                        return BadRequest(new { message = "Cannot switch to StrictLdap: LDAP Server / Domain Controller is not configured." });
+                    }
                 }
             }
 
             await _catalogRepo.SetSecurityPolicyModeAsync(req.Mode);
-            return Ok(new { Success = true, Mode = req.Mode.ToString() });
+            return Ok(new { success = true, mode = req.Mode.ToString() });
         }
 
         [HttpPost("security/policy/ldap")]
@@ -183,7 +197,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> UpdateLdapSettings([FromBody] UpdateLdapSettingsRequest req)
         {
             await _catalogRepo.UpdateLdapPolicySettingsAsync(req.Server, req.Port, req.BaseDn, req.UseSsl);
-            return Ok(new { Success = true });
+            return Ok(new { success = true });
         }
 
         [HttpGet("security/users")]
@@ -199,11 +213,11 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest req)
         {
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
-                return BadRequest("Username and Password are required.");
+                return BadRequest(new { message = "Username and Password are required." });
 
             string hash = PasswordHasher.Hash(req.Password);
             string userId = await _catalogRepo.CreateUserAsync(req.Username.Trim(), req.DisplayName.Trim(), hash, "Local", req.RoleIds);
-            return Ok(new { UserId = userId, Success = true });
+            return Ok(new { userId, success = true });
         }
 
         [HttpPut("security/users/{userId}")]
@@ -211,7 +225,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> UpdateUser(string userId, [FromBody] UpdateUserRequest req)
         {
             await _catalogRepo.UpdateUserRolesAndOverridesAsync(userId, req.RoleIds, req.GrantedOverrides, req.RevokedOverrides);
-            return Ok(new { Success = true });
+            return Ok(new { success = true });
         }
 
         [HttpPost("security/users/{userId}/password")]
@@ -219,11 +233,11 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> SetUserPassword(string userId, [FromBody] SetUserPasswordRequest req)
         {
             if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 6)
-                return BadRequest("Password must be at least 6 characters.");
+                return BadRequest(new { message = "Password must be at least 6 characters." });
 
             string hash = PasswordHasher.Hash(req.NewPassword);
             await _catalogRepo.UpdateUserPasswordAsync(userId, hash);
-            return Ok(new { Success = true });
+            return Ok(new { success = true });
         }
 
         [HttpDelete("security/users/{userId}")]
@@ -231,8 +245,8 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> DeleteUser(string userId)
         {
             bool deleted = await _catalogRepo.DeleteUserAsync(userId);
-            if (!deleted) return BadRequest("Cannot delete system user or user not found.");
-            return Ok(new { Success = true });
+            if (!deleted) return BadRequest(new { message = "Cannot delete system user or user not found." });
+            return Ok(new { success = true });
         }
 
         [HttpGet("security/roles")]
@@ -248,7 +262,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> UpsertRole([FromBody] RoleDto role)
         {
             await _catalogRepo.UpsertRoleAsync(role);
-            return Ok(new { Success = true });
+            return Ok(new { success = true });
         }
 
         [HttpDelete("security/roles/{roleId}")]
@@ -256,8 +270,8 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> DeleteRole(string roleId)
         {
             bool deleted = await _catalogRepo.DeleteRoleAsync(roleId);
-            if (!deleted) return BadRequest("Cannot delete built-in role or role not found.");
-            return Ok(new { Success = true });
+            if (!deleted) return BadRequest(new { message = "Cannot delete built-in role or role not found." });
+            return Ok(new { success = true });
         }
 
         [HttpGet("security/ldap-mappings")]
@@ -273,7 +287,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> UpsertLdapMapping([FromBody] UpsertLdapMappingRequest req)
         {
             await _catalogRepo.UpsertLdapGroupMappingAsync(req.AdGroupName, req.RoleId);
-            return Ok(new { Success = true });
+            return Ok(new { success = true });
         }
 
         [HttpDelete("security/ldap-mappings/{mappingId}")]
@@ -281,7 +295,7 @@ namespace ITB_SCREEN_RECORDER.Server.Controllers
         public async Task<IActionResult> DeleteLdapMapping(string mappingId)
         {
             await _catalogRepo.DeleteLdapGroupMappingAsync(mappingId);
-            return Ok(new { Success = true });
+            return Ok(new { success = true });
         }
 
         #endregion
