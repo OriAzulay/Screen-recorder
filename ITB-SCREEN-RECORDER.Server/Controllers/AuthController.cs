@@ -11,7 +11,6 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 public record LoginRequest(string Username, string Password);
-public record SelectRoleRequest(string? UserId, string RoleId);
 
 [ApiController]
 [Route("api/v1/auth")]
@@ -26,9 +25,6 @@ public class AuthController : ControllerBase
         _repository = repository;
     }
 
-    /// <summary>
-    /// בדיקת מצב האבטחה של המערכת (האם דרוש לוגין מקדים או שהכניסה פתוחה)
-    /// </summary>
     [HttpGet("status")]
     [AllowAnonymous]
     public async Task<IActionResult> GetAuthStatus()
@@ -42,113 +38,93 @@ public class AuthController : ControllerBase
             IsOpenMode = isOpenMode,
             IsAuthenticated = User.Identity?.IsAuthenticated ?? false,
             CurrentUsername = User.Identity?.Name,
-            CurrentRole = User.FindFirstValue(ClaimTypes.Role),
             IsRoot = User.HasClaim("is_root", "true")
         });
     }
 
-    /// <summary>
-    /// שליפת כלל התפקידים המוגדרים במערכת (עבור ה-Role Launchpad Grid)
-    /// </summary>
-    [HttpGet("roles")]
-    [AllowAnonymous]
-    public async Task<IActionResult> GetLaunchpadRoles()
-    {
-        var roles = await _repository.GetAllRolesAsync();
-        return Ok(roles);
-    }
-
-    /// <summary>
-    /// אימות משתמש (במצב Strict) - מחזיר את פרטי המשתמש ורשימת התפקידים הזמינים עבורו
-    /// </summary>
     [HttpPost("login")]
     [AllowAnonymous]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrWhiteSpace(request.Password))
         {
-            return BadRequest(new { Message = "Username and password are required." });
+            return BadRequest(new { message = "Username and password are required." });
         }
 
         var result = await _securityService.LoginAsync(request.Username.Trim(), request.Password);
         if (!result.Success)
         {
-            return Unauthorized(new { Message = result.ErrorMessage ?? "Invalid credentials." });
+            return Unauthorized(new { message = result.ErrorMessage ?? "Invalid credentials." });
         }
+
+        var permissions = await _securityService.CalculateAllUserPermissionsAsync(
+            result.UserId!,
+            result.AssignedRoleIds,
+            result.IsSystemImmutable
+        );
+
+        string token = _securityService.GenerateJwtToken(
+            result.UserId!,
+            result.Username!,
+            result.AssignedRoleIds,
+            permissions,
+            result.IsSystemImmutable
+        );
 
         return Ok(new
         {
-            UserId = result.UserId,
-            Username = result.Username,
-            DisplayName = result.DisplayName,
-            IsSystemImmutable = result.IsSystemImmutable,
-            AssignedRoleIds = result.AssignedRoleIds
+            token,
+            userId = result.UserId,
+            username = result.Username,
+            displayName = result.DisplayName,
+            isRoot = result.IsSystemImmutable,
+            roles = result.AssignedRoleIds,
+            permissions
         });
     }
 
     /// <summary>
-    /// בחירת תפקיד מתוך ה-Launchpad והנפקת JWT Token הנושא את הרשאות התפקיד
+    /// הנפקת סשן אורח במצב Open Mode – מכיל הרשאות מבצעיות בלבד (לעולם לא הגדרות או אבטחה)
     /// </summary>
-    [HttpPost("select-role")]
+    [HttpPost("guest-session")]
     [AllowAnonymous]
-    public async Task<IActionResult> SelectRole([FromBody] SelectRoleRequest request)
+    public async Task<IActionResult> CreateGuestSession()
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.RoleId))
-        {
-            return BadRequest(new { Message = "RoleId is required." });
-        }
-
         var policy = await _repository.GetSecurityPolicyAsync();
-        bool isOpenMode = policy.CurrentMode == AuthMode.Open;
-
-        string targetUserId;
-        string targetUsername;
-        bool isRoot = false;
-
-        if (isOpenMode)
+        if (policy.CurrentMode != AuthMode.Open)
         {
-            // במצב פתוח (Open Mode) - נוצר סשן אנונימי מבוסס התפקיד שנבחר בגריד
-            targetUserId = "usr_guest";
-            targetUsername = "Operator";
-        }
-        else
-        {
-            // במצב Strict - מוודאים זהות משתמש
-            if (string.IsNullOrWhiteSpace(request.UserId))
-            {
-                return Unauthorized(new { Message = "User authentication required in strict mode." });
-            }
-
-            var user = await _repository.GetUserByIdAsync(request.UserId);
-            if (user == null)
-            {
-                return Unauthorized(new { Message = "User not found." });
-            }
-
-            targetUserId = user.Id;
-            targetUsername = user.Username;
-            isRoot = user.IsSystemImmutable;
-
-            // בדיקה שהמשתמש אכן מורשה לבחור בתפקיד זה (אלא אם הוא משתמש העל החסין)
-            if (!isRoot && !user.AssignedRoleIds.Contains(request.RoleId, StringComparer.OrdinalIgnoreCase))
-            {
-                return Forbid();
-            }
+            return Unauthorized(new { message = "Guest access is disabled in strict mode." });
         }
 
-        // חישוב סל הרשאות אפקטיבי
-        var permissions = await _securityService.CalculateEffectivePermissionsAsync(targetUserId, request.RoleId, isRoot);
+        var guestRoles = new[] { "role_viewer", "role_operator" };
+        var guestPermissions = new[]
+        {
+            PermissionKeys.StationsView,
+            PermissionKeys.StationsControl,
+            PermissionKeys.PlaybackView,
+            PermissionKeys.PlaybackExport,
+            PermissionKeys.BookmarksManage,
+            PermissionKeys.ExtractorView,
+            PermissionKeys.StudioView
+        };
 
-        // הנפקת JWT חתום
-        string token = _securityService.GenerateJwtToken(targetUserId, targetUsername, request.RoleId, permissions, isRoot);
+        string token = _securityService.GenerateJwtToken(
+            "usr_guest",
+            "Guest",
+            guestRoles,
+            guestPermissions,
+            false
+        );
 
         return Ok(new
         {
-            Token = token,
-            RoleId = request.RoleId,
-            Username = targetUsername,
-            Permissions = permissions,
-            IsRoot = isRoot
+            token,
+            userId = "usr_guest",
+            username = "Guest",
+            displayName = "Guest Operator",
+            isRoot = false,
+            roles = guestRoles,
+            permissions = guestPermissions
         });
     }
 }

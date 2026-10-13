@@ -239,7 +239,11 @@ public sealed class CatalogRepository : ICatalogRepository
     public async Task<Dictionary<string, StationOverrideRecord>> GetAllOverridesAsync()
     {
         using var db = _factory.CreateConnection();
-        const string sql = "SELECT hostname AS Hostname, video_bitrate AS VideoBitrate, target_fps AS TargetFps, updated_at_utc AS UpdatedAtUtc FROM station_overrides;";
+        const string sql = @"
+            SELECT hostname AS Hostname, video_bitrate AS VideoBitrate, 
+                   target_fps AS TargetFps, updated_at_utc AS UpdatedAtUtc 
+            FROM station_overrides;
+        ";
         var rows = await db.QueryAsync<StationOverrideRecord>(sql);
         return rows.ToDictionary(r => r.Hostname, StringComparer.OrdinalIgnoreCase);
     }
@@ -272,7 +276,7 @@ public sealed class CatalogRepository : ICatalogRepository
     {
         using var db = _factory.CreateConnection();
         const string sql = @"
-            SELECT id, name, hostnames_json AS HostnamesJson, ous_json AS OusJson, 
+            SELECT id AS Id, name AS Name, hostnames_json AS HostnamesJson, ous_json AS OusJson, 
                    is_default AS IsDefault, display_order AS DisplayOrder, updated_at_utc AS UpdatedAtUtc 
             FROM custom_tabs 
             ORDER BY display_order ASC, name ASC;
@@ -346,6 +350,16 @@ public sealed class CatalogRepository : ICatalogRepository
     #endregion
 
     #region Security Policy
+    private sealed class SecurityPolicyEntity
+    {
+        public long CurrentMode { get; set; }
+        public string? LdapServer { get; set; }
+        public long LdapPort { get; set; }
+        public string? LdapBaseDn { get; set; }
+        public long UseSsl { get; set; }
+        public long UpdatedAtUtc { get; set; }
+    }
+
     public async Task<SecurityPolicyStateDto> GetSecurityPolicyAsync()
     {
         using var db = _factory.CreateConnection();
@@ -355,21 +369,22 @@ public sealed class CatalogRepository : ICatalogRepository
                    ldap_use_ssl AS UseSsl, updated_at_utc AS UpdatedAtUtc
             FROM security_policies WHERE id = 'GLOBAL';
         ";
-        var row = await db.QuerySingleOrDefaultAsync(sql);
+
+        var row = await db.QuerySingleOrDefaultAsync<SecurityPolicyEntity>(sql);
         if (row == null)
         {
             return new SecurityPolicyStateDto(AuthMode.Open, false, null, 389, null, false, 0);
         }
 
-        bool isLdapConfigured = !string.IsNullOrWhiteSpace((string?)row.LdapServer);
+        bool isLdapConfigured = !string.IsNullOrWhiteSpace(row.LdapServer);
         return new SecurityPolicyStateDto(
             (AuthMode)(int)row.CurrentMode,
             isLdapConfigured,
-            (string?)row.LdapServer,
+            row.LdapServer,
             (int)row.LdapPort,
-            (string?)row.LdapBaseDn,
-            (int)row.UseSsl == 1,
-            (long)row.UpdatedAtUtc
+            row.LdapBaseDn,
+            row.UseSsl == 1,
+            row.UpdatedAtUtc
         );
     }
 
@@ -405,30 +420,43 @@ public sealed class CatalogRepository : ICatalogRepository
     #endregion
 
     #region Roles & Permissions
+    private sealed class RoleEntity
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Icon { get; set; } = "Shield";
+        public string Color { get; set; } = "#06B6D4";
+        public long DisplayOrder { get; set; }
+        public long IsBuiltIn { get; set; }
+    }
+
     public async Task<IReadOnlyList<RoleDto>> GetAllRolesAsync()
     {
         using var db = _factory.CreateConnection();
         const string rolesSql = @"
-            SELECT id, name, description, icon, color, display_order AS DisplayOrder, is_built_in AS IsBuiltIn
+            SELECT id AS Id, name AS Name, description AS Description, 
+                   icon AS Icon, color AS Color, display_order AS DisplayOrder, 
+                   is_built_in AS IsBuiltIn
             FROM roles ORDER BY display_order ASC;
         ";
         const string permsSql = "SELECT role_id AS RoleId, permission_key AS PermissionKey FROM role_permissions;";
 
-        var roles = (await db.QueryAsync(rolesSql)).ToList();
+        var roles = (await db.QueryAsync<RoleEntity>(rolesSql)).ToList();
         var perms = await db.QueryAsync<(string RoleId, string PermissionKey)>(permsSql);
 
         var permsLookup = perms.GroupBy(p => p.RoleId)
                                .ToDictionary(g => g.Key, g => g.Select(x => x.PermissionKey).ToList());
 
         return roles.Select(r => new RoleDto(
-            Id: (string)r.id,
-            Name: (string)r.name,
-            Description: (string)r.description,
-            Icon: (string)r.icon,
-            Color: (string)r.color,
+            Id: r.Id,
+            Name: r.Name,
+            Description: r.Description,
+            Icon: r.Icon,
+            Color: r.Color,
             DisplayOrder: (int)r.DisplayOrder,
-            IsBuiltIn: (int)r.IsBuiltIn == 1,
-            Permissions: permsLookup.TryGetValue((string)r.id, out var pList) ? pList : new List<string>()
+            IsBuiltIn: r.IsBuiltIn == 1,
+            Permissions: permsLookup.TryGetValue(r.Id, out var pList) ? pList : new List<string>()
         )).ToList();
     }
 
@@ -488,39 +516,52 @@ public sealed class CatalogRepository : ICatalogRepository
     #endregion
 
     #region Users
+    private sealed class UserEntity
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string AuthSource { get; set; } = "Local";
+        public long IsActive { get; set; }
+        public long IsSystemImmutable { get; set; }
+        public long CreatedAtUtc { get; set; }
+        public long? LastLoginUtc { get; set; }
+    }
+
     public async Task<IReadOnlyList<UserDto>> GetAllUsersAsync()
     {
         using var db = _factory.CreateConnection();
         const string usersSql = @"
-            SELECT id, username, display_name AS DisplayName, auth_source AS AuthSource,
-                   is_active AS IsActive, is_system_immutable AS IsSystemImmutable,
-                   created_at_utc AS CreatedAtUtc, last_login_utc AS LastLoginUtc
+            SELECT id AS Id, username AS Username, display_name AS DisplayName, 
+                   auth_source AS AuthSource, is_active AS IsActive, 
+                   is_system_immutable AS IsSystemImmutable, created_at_utc AS CreatedAtUtc, 
+                   last_login_utc AS LastLoginUtc
             FROM users 
             WHERE is_system_immutable = 0
             ORDER BY username ASC;
         ";
 
-        var users = (await db.QueryAsync(usersSql)).ToList();
+        var users = (await db.QueryAsync<UserEntity>(usersSql)).ToList();
 
         var userRoles = (await db.QueryAsync<(string UserId, string RoleId)>("SELECT user_id, role_id FROM user_roles;")).ToList();
-        var overrides = (await db.QueryAsync<(string UserId, string Perm, int Granted)>("SELECT user_id, permission_key, is_granted FROM user_permission_overrides;")).ToList();
+        var overrides = (await db.QueryAsync<(string UserId, string Perm, long Granted)>("SELECT user_id, permission_key, is_granted FROM user_permission_overrides;")).ToList();
 
         var rolesGroup = userRoles.GroupBy(ur => ur.UserId).ToDictionary(g => g.Key, g => g.Select(x => x.RoleId).ToList());
         var grantsGroup = overrides.Where(o => o.Granted == 1).GroupBy(o => o.UserId).ToDictionary(g => g.Key, g => g.Select(x => x.Perm).ToList());
         var revokesGroup = overrides.Where(o => o.Granted == 0).GroupBy(o => o.UserId).ToDictionary(g => g.Key, g => g.Select(x => x.Perm).ToList());
 
         return users.Select(u => new UserDto(
-            Id: (string)u.id,
-            Username: (string)u.username,
-            DisplayName: (string)u.DisplayName,
-            AuthSource: (string)u.AuthSource,
-            IsActive: (int)u.IsActive == 1,
-            IsSystemImmutable: (int)u.IsSystemImmutable == 1,
-            CreatedAtUtc: (long)u.CreatedAtUtc,
-            LastLoginUtc: (long?)u.LastLoginUtc,
-            AssignedRoleIds: rolesGroup.TryGetValue((string)u.id, out var rList) ? rList : new List<string>(),
-            PermissionOverridesGranted: grantsGroup.TryGetValue((string)u.id, out var gList) ? gList : new List<string>(),
-            PermissionOverridesRevoked: revokesGroup.TryGetValue((string)u.id, out var vList) ? vList : new List<string>()
+            Id: u.Id,
+            Username: u.Username,
+            DisplayName: u.DisplayName,
+            AuthSource: u.AuthSource,
+            IsActive: u.IsActive == 1,
+            IsSystemImmutable: u.IsSystemImmutable == 1,
+            CreatedAtUtc: u.CreatedAtUtc,
+            LastLoginUtc: u.LastLoginUtc,
+            AssignedRoleIds: rolesGroup.TryGetValue(u.Id, out var rList) ? rList : new List<string>(),
+            PermissionOverridesGranted: grantsGroup.TryGetValue(u.Id, out var gList) ? gList : new List<string>(),
+            PermissionOverridesRevoked: revokesGroup.TryGetValue(u.Id, out var vList) ? vList : new List<string>()
         )).ToList();
     }
 
@@ -528,27 +569,28 @@ public sealed class CatalogRepository : ICatalogRepository
     {
         using var db = _factory.CreateConnection();
         const string userSql = @"
-            SELECT id, username, display_name AS DisplayName, auth_source AS AuthSource,
-                   is_active AS IsActive, is_system_immutable AS IsSystemImmutable,
-                   created_at_utc AS CreatedAtUtc, last_login_utc AS LastLoginUtc
+            SELECT id AS Id, username AS Username, display_name AS DisplayName, 
+                   auth_source AS AuthSource, is_active AS IsActive, 
+                   is_system_immutable AS IsSystemImmutable, created_at_utc AS CreatedAtUtc, 
+                   last_login_utc AS LastLoginUtc
             FROM users WHERE username = @username COLLATE NOCASE;
         ";
-        var u = await db.QuerySingleOrDefaultAsync(userSql, new { username });
+        var u = await db.QuerySingleOrDefaultAsync<UserEntity>(userSql, new { username });
         if (u == null) return null;
 
-        string userId = (string)u.id;
+        string userId = u.Id;
         var roleIds = (await db.QueryAsync<string>("SELECT role_id FROM user_roles WHERE user_id = @userId;", new { userId })).ToList();
-        var overrides = (await db.QueryAsync<(string Perm, int Granted)>("SELECT permission_key, is_granted FROM user_permission_overrides WHERE user_id = @userId;", new { userId })).ToList();
+        var overrides = (await db.QueryAsync<(string Perm, long Granted)>("SELECT permission_key, is_granted FROM user_permission_overrides WHERE user_id = @userId;", new { userId })).ToList();
 
         return new UserDto(
             Id: userId,
-            Username: (string)u.username,
-            DisplayName: (string)u.DisplayName,
-            AuthSource: (string)u.AuthSource,
-            IsActive: (int)u.IsActive == 1,
-            IsSystemImmutable: (int)u.IsSystemImmutable == 1,
-            CreatedAtUtc: (long)u.CreatedAtUtc,
-            LastLoginUtc: (long?)u.LastLoginUtc,
+            Username: u.Username,
+            DisplayName: u.DisplayName,
+            AuthSource: u.AuthSource,
+            IsActive: u.IsActive == 1,
+            IsSystemImmutable: u.IsSystemImmutable == 1,
+            CreatedAtUtc: u.CreatedAtUtc,
+            LastLoginUtc: u.LastLoginUtc,
             AssignedRoleIds: roleIds,
             PermissionOverridesGranted: overrides.Where(o => o.Granted == 1).Select(o => o.Perm).ToList(),
             PermissionOverridesRevoked: overrides.Where(o => o.Granted == 0).Select(o => o.Perm).ToList()
@@ -559,26 +601,27 @@ public sealed class CatalogRepository : ICatalogRepository
     {
         using var db = _factory.CreateConnection();
         const string userSql = @"
-            SELECT id, username, display_name AS DisplayName, auth_source AS AuthSource,
-                   is_active AS IsActive, is_system_immutable AS IsSystemImmutable,
-                   created_at_utc AS CreatedAtUtc, last_login_utc AS LastLoginUtc
+            SELECT id AS Id, username AS Username, display_name AS DisplayName, 
+                   auth_source AS AuthSource, is_active AS IsActive, 
+                   is_system_immutable AS IsSystemImmutable, created_at_utc AS CreatedAtUtc, 
+                   last_login_utc AS LastLoginUtc
             FROM users WHERE id = @userId;
         ";
-        var u = await db.QuerySingleOrDefaultAsync(userSql, new { userId });
+        var u = await db.QuerySingleOrDefaultAsync<UserEntity>(userSql, new { userId });
         if (u == null) return null;
 
         var roleIds = (await db.QueryAsync<string>("SELECT role_id FROM user_roles WHERE user_id = @userId;", new { userId })).ToList();
-        var overrides = (await db.QueryAsync<(string Perm, int Granted)>("SELECT permission_key, is_granted FROM user_permission_overrides WHERE user_id = @userId;", new { userId })).ToList();
+        var overrides = (await db.QueryAsync<(string Perm, long Granted)>("SELECT permission_key, is_granted FROM user_permission_overrides WHERE user_id = @userId;", new { userId })).ToList();
 
         return new UserDto(
             Id: userId,
-            Username: (string)u.username,
-            DisplayName: (string)u.DisplayName,
-            AuthSource: (string)u.AuthSource,
-            IsActive: (int)u.IsActive == 1,
-            IsSystemImmutable: (int)u.IsSystemImmutable == 1,
-            CreatedAtUtc: (long)u.CreatedAtUtc,
-            LastLoginUtc: (long?)u.LastLoginUtc,
+            Username: u.Username,
+            DisplayName: u.DisplayName,
+            AuthSource: u.AuthSource,
+            IsActive: u.IsActive == 1,
+            IsSystemImmutable: u.IsSystemImmutable == 1,
+            CreatedAtUtc: u.CreatedAtUtc,
+            LastLoginUtc: u.LastLoginUtc,
             AssignedRoleIds: roleIds,
             PermissionOverridesGranted: overrides.Where(o => o.Granted == 1).Select(o => o.Perm).ToList(),
             PermissionOverridesRevoked: overrides.Where(o => o.Granted == 0).Select(o => o.Perm).ToList()
@@ -626,7 +669,7 @@ public sealed class CatalogRepository : ICatalogRepository
         using var db = _factory.CreateConnection();
         using var tx = db.BeginTransaction();
 
-        var isImmutable = await db.ExecuteScalarAsync<int>("SELECT is_system_immutable FROM users WHERE id = @userId;", new { userId }, tx);
+        var isImmutable = await db.ExecuteScalarAsync<long>("SELECT is_system_immutable FROM users WHERE id = @userId;", new { userId }, tx);
         if (isImmutable == 1)
         {
             throw new InvalidOperationException("Cannot alter roles or overrides for the system root user.");

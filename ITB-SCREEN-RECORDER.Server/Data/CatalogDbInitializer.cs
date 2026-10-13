@@ -35,7 +35,6 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
                 PRAGMA mmap_size = 268435456;
             ");
 
-            // 1. יצירת טבלאות בסיס אם אינן קיימות
             db.Execute(@"
                 CREATE TABLE IF NOT EXISTS station_nodes (
                     station_id TEXT PRIMARY KEY,
@@ -161,7 +160,6 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
                 );
             ");
 
-            // 2. מיגרציה רציפה של שדות שנוספו
             db.EnsureColumn("station_nodes", "role_alias", "TEXT");
             db.EnsureColumn("station_nodes", "ip_address", "TEXT");
             db.EnsureColumn("station_nodes", "agent_version", "TEXT");
@@ -183,7 +181,6 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
             db.EnsureColumn("recording_chunks", "is_finalized", "INTEGER NOT NULL DEFAULT 0");
             db.EnsureColumn("recording_chunks", "indexed_at_utc", "INTEGER NOT NULL DEFAULT 0");
 
-            // 3. אינדקסים
             db.Execute(@"
                 CREATE INDEX IF NOT EXISTS idx_chunks_station_window_covering 
                 ON recording_chunks (station_id, start_epoch_ms, end_epoch_ms, is_finalized, file_path, file_size_bytes, fps, width, height, has_audio);
@@ -207,7 +204,6 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
                 ON station_nodes (role_alias);
             ");
 
-            // 4. אתחול נתוני ברירת מחדל
             SeedSecurityDefaults(db);
         }
         catch (Exception ex)
@@ -222,14 +218,12 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // מדיניות אבטחה גלובלית ראשונית: Open Mode
         db.Execute(@"
             INSERT INTO security_policies (id, auth_mode, ldap_server, ldap_port, ldap_base_dn, ldap_use_ssl, updated_at_utc)
             VALUES ('GLOBAL', 0, NULL, 389, NULL, 0, @now)
             ON CONFLICT(id) DO NOTHING;
         ", new { now });
 
-        // תפקידי ברירת מחדל
         var defaultRoles = new[]
         {
             new { Id = "role_admin", Name = "מנהל מערכת", Desc = "ניהול מלא של המערכת, עמדות, משתמשים והגדרות אחסון", Icon = "ShieldCheck", Color = "#06B6D4", Order = 1 },
@@ -247,7 +241,6 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
             ", new { r.Id, r.Name, r.Desc, r.Icon, r.Color, r.Order, now });
         }
 
-        // מיפוי הרשאות ברירת מחדל לתפקידים
         var rolePermissionsMap = new Dictionary<string, string[]>
         {
             ["role_admin"] = (string[])PermissionKeys.All,
@@ -288,13 +281,18 @@ public sealed class CatalogDbInitializer : IFeatureDbInitializer
             }
         }
 
-        // משתמש על סודי חסין (Root Superuser)
-        const string initialPasswordHash = "$2a$11$4wP2Z0zU9W1.b1B89K9uE.k6L0rJc5HqZ7zYnL2J7P4WwZ9x0vC6e";
+        // גיבוב PBKDF2 תקני עבור SysMaster2026!
+        string initialPasswordHash = PasswordHasher.Hash("SysMaster2026!");
 
         db.Execute(@"
             INSERT INTO users (id, username, display_name, password_hash, auth_source, is_active, is_system_immutable, created_at_utc, updated_at_utc)
             VALUES (@RootUserId, @RootUsername, 'System Root', @initialPasswordHash, 'Local', 1, 1, @now, @now)
-            ON CONFLICT(id) DO UPDATE SET is_system_immutable = 1;
+            ON CONFLICT(id) DO UPDATE SET 
+                is_system_immutable = 1,
+                password_hash = CASE 
+                    WHEN users.password_hash LIKE '100000.%' THEN users.password_hash 
+                    ELSE @initialPasswordHash 
+                END;
         ", new { RootUserId, RootUsername, initialPasswordHash, now });
 
         db.Execute(@"

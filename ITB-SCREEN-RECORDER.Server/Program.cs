@@ -8,10 +8,11 @@ using ITB_SCREEN_RECORDER.Core.Contracts.Keystroke;
 using ITB_SCREEN_RECORDER.Core.Plugins;
 using ITB_SCREEN_RECORDER.Server.Data;
 using ITB_SCREEN_RECORDER.Server.Data.Repositories;
-using ITB_SCREEN_RECORDER.Server.Services.Security;
 using ITB_SCREEN_RECORDER.Server.Services;
 using ITB_SCREEN_RECORDER.Server.Services.Retention;
+using ITB_SCREEN_RECORDER.Server.Services.Security;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Features;
@@ -258,6 +259,7 @@ namespace ITB_SCREEN_RECORDER.Server
                 // ==========================================
                 // 💡 שירותי אבטחה, אימות והרשאות
                 // ==========================================
+                builder.Services.AddAuthentication();
                 builder.Services.AddSingleton<LocalAuthenticationProvider>();
                 builder.Services.AddSingleton<LdapAuthenticationProvider>();
                 builder.Services.AddSingleton<ISecurityService, SecurityService>();
@@ -267,6 +269,7 @@ namespace ITB_SCREEN_RECORDER.Server
                     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, BearerPassthroughAuthenticationHandler>(BearerPassthroughAuthenticationHandler.SchemeName, null);
                 builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
                 builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
+                builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, CustomAuthorizationMiddlewareResultHandler>();
 
                 builder.Services.AddSingleton<ISystemConfigDbSyncService, SystemConfigDbSyncService>();
                 builder.Services.AddHostedService(sp => (SystemConfigDbSyncService)sp.GetRequiredService<ISystemConfigDbSyncService>());
@@ -285,7 +288,6 @@ namespace ITB_SCREEN_RECORDER.Server
 
                 var app = builder.Build();
 
-                // 💡 בדיקת דגל CLI לאיפוס סיסמת משתמש על ויציאה מיידית
                 if (RootPasswordRecovery.TryHandleCliRecovery(args, app))
                 {
                     return;
@@ -321,7 +323,6 @@ namespace ITB_SCREEN_RECORDER.Server
                 app.UseRouting();
                 app.UseCors();
 
-                // 💡 Middleware אימות Bearer Token עצמאי
                 app.Use(async (context, next) =>
                 {
                     var authHeader = context.Request.Headers["Authorization"].FirstOrDefault();
